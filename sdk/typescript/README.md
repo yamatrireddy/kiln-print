@@ -22,6 +22,19 @@ const invoice = await client.printPdf({
   options: { pageRange: "1-2", paperSize: "A4", duplex: "LONG_EDGE", scale: "SHRINK_TO_FIT" },
 });
 
+// Label printers without writing ZPL: the agent encodes for the printer's language.
+await client.printLabel({
+  printer: zebra,
+  label: {
+    widthMm: 100,
+    heightMm: 50,
+    elements: [
+      { type: "TEXT", xMm: 5, yMm: 5, text: "Ship to: Jane", heightMm: 5 },
+      { type: "BARCODE", xMm: 5, yMm: 15, symbology: "CODE128", data: "1Z999AA1" },
+    ],
+  },
+});
+
 const done = await client.waitForJob(invoice.jobId);
 console.log(done.status, done.delivery, done.completion);
 ```
@@ -32,8 +45,9 @@ console.log(done.status, done.delivery, done.completion);
 |---|---|
 | `connect()` / `disconnect()` | `connect` resolves with the session (permissions, limits, supported languages). |
 | `getPrinters()`, `getPrinter(p)`, `getDefaultPrinter()`, `getPrinterCapabilities(p)` | `p` is a printer name or a `Printer` object. |
-| `print(request)` | Generic: `{ type: "RAW" \| "TEXT" \| "PDF" \| "IMAGE" \| "HTML", ... }`. |
+| `print(request)` | Generic: `{ type, ... }` with type `RAW`, `TEXT`, `PDF`, `IMAGE`, `HTML`, `LABEL`, `RECEIPT` or `DOT_MATRIX`. |
 | `printRaw`, `printText`, `printPdf`, `printImage`, `printHtml` | Each resolves with the created `Job` (status `QUEUED`, delivery `REQUEST_ACCEPTED`). |
+| `printLabel`, `printReceipt`, `printDotMatrix` | Structured documents encoded by the agent: labels as ZPL/EPL/TSPL/CPCL (from the printer's `language` hint or `label.language`), receipts as ESC/POS, and dot-matrix forms as ESC/P. |
 | `getJobs(filter)`, `getJob(id)`, `cancelJob(id)`, `waitForJob(id)` | Filter by status, printer, client, `since`/`until`. |
 | `getQueues()`, `getQueue(p)` | Agent queue and OS spooler queue. |
 | `onJobStatus(listener)`, `onJobStatus(jobId, listener)` | Per-job subscriptions replay the latest known state. |

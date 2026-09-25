@@ -7,6 +7,7 @@ Kiln Print lets web apps, desktop apps and backend services print to printers at
 | Technology choice | [adr/0001-technology-stack.md](adr/0001-technology-stack.md) |
 | Why a user-session process | [adr/0002-user-session-agent.md](adr/0002-user-session-agent.md) |
 | Retry policy | [adr/0003-no-automatic-print-retries.md](adr/0003-no-automatic-print-retries.md) |
+| Label/receipt/dot-matrix documents, direct TCP | [adr/0005-label-receipt-dot-matrix-and-direct-tcp.md](adr/0005-label-receipt-dot-matrix-and-direct-tcp.md) |
 | PDF / image / HTML rendering | [adr/0004-document-rendering.md](adr/0004-document-rendering.md) |
 | Wire protocol | [protocol.md](protocol.md) |
 | Security and trust model | [security-model.md](security-model.md) |
@@ -38,7 +39,7 @@ flowchart TB
 
     subgraph Core["kiln-core (platform-independent)"]
         ENG["PrintEngine / job manager"]
-        REN["RendererRegistry<br/>RAW · TEXT · PDF · IMAGE · HTML"]
+        REN["RendererRegistry<br/>RAW · TEXT · PDF · IMAGE · HTML<br/>LABEL · RECEIPT · DOT_MATRIX"]
         PRO["ProtocolRegistry<br/>PrinterProtocol"]
         Q["Per-printer FIFO queues<br/>+ byte budget"]
         MON["Spooler monitor"]
@@ -56,7 +57,7 @@ flowchart TB
         MOCK["MockProvider (CI)"]
         LNX["LinuxPrintProvider (Phase 6)"]
         MAC["MacPrintProvider (Phase 6)"]
-        TCP["TcpRawProvider (Phase 3)"]
+        TCP["TcpPrintProvider<br/>RAW :9100 + device status"]
         SER["SerialProvider (Phase 6)"]
     end
 
@@ -76,10 +77,11 @@ flowchart TB
 | Path | Crate | Responsibility | `unsafe` |
 |---|---|---|---|
 | `print-core/` | `kiln-core` | Model, error model, extension traits, engine, queues, monitor, discovery | forbidden |
-| `protocols/` | `kiln-protocols` | Printer-language descriptors plus read-only inspection (ZPL, EPL, CPCL, TSPL, ESC/POS, ESC/P, RAW) | forbidden |
+| `protocols/` | `kiln-protocols` | Printer-language descriptors and inspection; label encoders (ZPL, EPL, TSPL, CPCL); ESC/POS and ESC/P command builders; strict text encoders (IBM437/850/858, WHATWG) | forbidden |
 | `renderers/` | `kiln-renderers` | RAW passthrough; text (RAW-encoded or native layout); PDF validation; image decoding; HTML → PDF in a sandboxed headless browser | forbidden |
 | `providers/windows/` | `kiln-provider-windows` | Winspool/GDI adapter; the only crate that calls Win32 | allowed, documented per block |
 | `providers/mock/` | `kiln-provider-mock` | Scriptable provider for CI and `--mock` development | forbidden |
+| `providers/tcp/` | `kiln-provider-tcp` | Direct RAW TCP (9100) to configured printers; ZPL `~HS` / ESC/POS `DLE EOT` device status | forbidden |
 | `providers/linux/`, `providers/macos/` | — | Placeholders with implementation notes (Phase 6) | — |
 | `agent/` | `kiln-agent` | Config, logging, SQLite, security, WebSocket/REST API, CLI | forbidden |
 | `sdk/typescript/` | `@kiln-print/sdk` | TypeScript SDK for browsers and Node | — |

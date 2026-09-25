@@ -18,6 +18,9 @@ const APP_DIR: &str = "KilnPrint";
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentConfig {
+    /// Printers reached directly over RAW TCP (port 9100). Only these hosts are ever
+    /// contacted; clients cannot name arbitrary addresses.
+    pub network_printers: Vec<NetworkPrinterConfig>,
     pub server: ServerConfig,
     pub security: SecurityConfig,
     pub limits: LimitsConfig,
@@ -206,6 +209,49 @@ impl Default for ProvidersConfig {
     }
 }
 
+fn default_raw_port() -> u16 {
+    9100
+}
+fn default_connect_timeout_ms() -> u64 {
+    3000
+}
+fn default_write_timeout_ms() -> u64 {
+    30_000
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkPrinterConfig {
+    /// Display name, also used to address the printer (must be unique).
+    pub name: String,
+    /// IP address or host name.
+    pub host: String,
+    #[serde(default = "default_raw_port")]
+    pub port: u16,
+    /// Command language (`ZPL`, `EPL`, `TSPL`, `CPCL`, `ESC/POS`, `ESC/P`).
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Device status protocol: `NONE`, `ZPL` (~HS) or `ESC/POS` (DLE EOT).
+    #[serde(default)]
+    pub status: kiln_provider_tcp::StatusQuery,
+    #[serde(default = "default_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+    #[serde(default = "default_write_timeout_ms")]
+    pub write_timeout_ms: u64,
+}
+
+impl NetworkPrinterConfig {
+    pub fn to_provider_config(&self) -> kiln_provider_tcp::TcpPrinterConfig {
+        let mut config =
+            kiln_provider_tcp::TcpPrinterConfig::new(&self.name, &self.host, self.port);
+        config.language = self.language.clone();
+        config.status_query = self.status;
+        config.connect_timeout = Duration::from_millis(self.connect_timeout_ms.max(100));
+        config.write_timeout = Duration::from_millis(self.write_timeout_ms.max(100));
+        config
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HtmlSettings {
@@ -359,6 +405,43 @@ impl AgentConfig {
             );
         }
         ensure!(self.html.timeout_secs > 0, "html.timeout_secs must be > 0");
+        let mut languages = kiln_core::protocol::ProtocolRegistry::new();
+        for protocol in kiln_protocols::builtin() {
+            languages.register(protocol);
+        }
+        let mut names = HashSet::new();
+        for printer in &self.network_printers {
+            let name = printer.name.trim();
+            ensure!(
+                !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
+                "network printer name '{}' must be 1-128 printable characters",
+                printer.name
+            );
+            ensure!(
+                names.insert(name.to_ascii_lowercase()),
+                "duplicate network printer name '{name}'"
+            );
+            ensure!(
+                !printer.host.is_empty()
+                    && printer.host.len() <= 253
+                    && printer
+                        .host
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c)),
+                "network printer '{name}': invalid host '{}'",
+                printer.host
+            );
+            ensure!(
+                printer.port > 0,
+                "network printer '{name}': port must be 1-65535"
+            );
+            if let Some(language) = &printer.language {
+                ensure!(
+                    languages.resolve(language).is_some(),
+                    "network printer '{name}': unknown language '{language}'"
+                );
+            }
+        }
         let mut ids = HashSet::new();
         for client in &self.security.clients {
             ensure!(
@@ -479,6 +562,42 @@ mod tests {
 
         let typo = "[server]\nbnid = \"127.0.0.1:1\"\n";
         assert!(toml::from_str::<AgentConfig>(typo).is_err());
+    }
+
+    #[test]
+    fn network_printers_are_validated() {
+        let toml = r#"
+            [[network_printers]]
+            name = "Dock Zebra"
+            host = "192.168.1.50"
+            language = "ZPL"
+            status = "ZPL"
+
+            [[network_printers]]
+            name = "Front Receipt"
+            host = "pos-printer.local"
+            port = 9101
+            language = "esc/pos"
+            status = "ESC/POS"
+        "#;
+        let config: AgentConfig = toml::from_str(toml).expect("parse");
+        config.validate().expect("valid");
+        assert_eq!(config.network_printers[0].port, 9100);
+        let tcp = config.network_printers[1].to_provider_config();
+        assert_eq!(tcp.status_query, kiln_provider_tcp::StatusQuery::EscPos);
+
+        let mut bad = config.clone();
+        bad.network_printers[1].name = "dock zebra".into();
+        assert!(
+            bad.validate().is_err(),
+            "names are unique case-insensitively"
+        );
+        let mut bad = config.clone();
+        bad.network_printers[0].host = "evil host; rm".into();
+        assert!(bad.validate().is_err());
+        let mut bad = config;
+        bad.network_printers[0].language = Some("PCL9".into());
+        assert!(bad.validate().is_err());
     }
 
     #[test]

@@ -15,13 +15,16 @@ export { PrintClient, DEFAULT_URL } from "./client.ts";
 export type {
   ClientEvents,
   ConnectionState,
+  DotMatrixPrint,
   HtmlPrint,
   ImagePrint,
+  LabelPrint,
   PdfPrint,
   PrintClientOptions,
   PrintRequest,
   PrinterRef,
   RawPrint,
+  ReceiptPrint,
   ReconnectOptions,
   TextPrint,
 } from "./client.ts";

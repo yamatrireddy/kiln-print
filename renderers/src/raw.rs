@@ -71,6 +71,7 @@ mod tests {
                 status: PrinterState::Ready,
                 conditions: vec![],
                 queued_jobs: None,
+                language: None,
                 capabilities: None,
             },
             accepted,

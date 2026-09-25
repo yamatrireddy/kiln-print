@@ -746,6 +746,13 @@ impl PrintEngine {
             renderer.render(document, &target)
         })
         .await?;
+        // Structured documents (labels, receipts, dot-matrix) report the language they
+        // were encoded in, e.g. ZPL chosen from the printer's hint.
+        if language.is_none() {
+            if let PrintPayload::Raw(raw) = &payload {
+                language.clone_from(&raw.language);
+            }
+        }
         if !provider.supports(&printer, payload.kind()) {
             return Err(PrintError::new(
                 ErrorCode::UnsupportedDocument,
@@ -1171,6 +1178,7 @@ mod tests {
             status: PrinterState::Ready,
             conditions: vec![],
             queued_jobs: None,
+            language: None,
             capabilities: None,
         };
         assert!(PrinterScope::All.allows(&printer));

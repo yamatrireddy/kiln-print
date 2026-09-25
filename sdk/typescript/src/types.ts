@@ -5,7 +5,7 @@
 
 export type ConnectionType = "LOCAL" | "NETWORK" | "USB" | "SERIAL" | "VIRTUAL";
 export type PrinterState = "READY" | "PRINTING" | "PAUSED" | "OFFLINE" | "ERROR" | "UNKNOWN";
-export type DocumentType = "RAW" | "TEXT" | "PDF" | "HTML" | "IMAGE";
+export type DocumentType = "RAW" | "TEXT" | "PDF" | "HTML" | "IMAGE" | "LABEL" | "RECEIPT" | "DOT_MATRIX";
 export type Orientation = "PORTRAIT" | "LANDSCAPE";
 
 export interface PaperSize {
@@ -46,6 +46,8 @@ export interface Printer {
   status: PrinterState;
   conditions: string[];
   queuedJobs: number | null;
+  /** Command language the printer is known to speak (ZPL, ESC/POS, …), if detected or configured. */
+  language: string | null;
   capabilities?: PrinterCapabilities;
 }
 
@@ -264,4 +266,130 @@ export interface JobFilter {
   until?: Date | string;
   limit?: number;
   offset?: number;
+}
+
+// ------------------------------------------------------------------ labels, receipts, dot matrix
+
+export type Symbology = "CODE128" | "CODE39" | "EAN13" | "EAN8" | "UPC_A" | "ITF";
+export type QrErrorCorrection = "L" | "M" | "Q" | "H";
+export type Rotation = 0 | 90 | 180 | 270;
+
+/** One element of a language-neutral label. Positions are in millimetres from the top-left. */
+export type LabelElement =
+  | { type: "TEXT"; xMm: number; yMm: number; text: string; heightMm?: number; rotation?: Rotation; font?: string }
+  | {
+      type: "BARCODE";
+      xMm: number;
+      yMm: number;
+      symbology: Symbology;
+      data: string;
+      heightMm?: number;
+      /** Narrow bar width in dots (default 2). */
+      moduleWidth?: number;
+      humanReadable?: boolean;
+      rotation?: Rotation;
+    }
+  | { type: "QR"; xMm: number; yMm: number; data: string; magnification?: number; errorCorrection?: QrErrorCorrection }
+  | { type: "DATA_MATRIX"; xMm: number; yMm: number; data: string; moduleSize?: number }
+  | { type: "BOX"; xMm: number; yMm: number; widthMm: number; heightMm: number; thicknessMm?: number }
+  /** Commands in the target language, inserted verbatim. */
+  | { type: "RAW"; data: string };
+
+/** A label described once and encoded by the agent as ZPL, EPL, TSPL or CPCL. */
+export interface LabelDocument {
+  widthMm: number;
+  heightMm: number;
+  /** Printer resolution (default 203). */
+  dpi?: number;
+  /** ZPL | EPL | TSPL | CPCL. Defaults to the printer's language hint. */
+  language?: string;
+  gapMm?: number;
+  /** 0-30. */
+  darkness?: number;
+  /** Inches per second. */
+  speed?: number;
+  elements: LabelElement[];
+}
+
+type Align = "LEFT" | "CENTER" | "RIGHT";
+
+export type ReceiptItem =
+  | {
+      type: "TEXT";
+      text: string;
+      align?: Align;
+      bold?: boolean;
+      underline?: boolean;
+      doubleWidth?: boolean;
+      doubleHeight?: boolean;
+      invert?: boolean;
+      small?: boolean;
+    }
+  | { type: "COLUMNS"; left: string; right: string; bold?: boolean }
+  | { type: "SEPARATOR"; character?: string }
+  | { type: "FEED"; lines?: number }
+  | {
+      type: "BARCODE";
+      symbology: Symbology;
+      data: string;
+      heightDots?: number;
+      moduleWidth?: number;
+      humanReadable?: boolean;
+      align?: Align;
+    }
+  | { type: "QR"; data: string; size?: number; errorCorrection?: QrErrorCorrection; align?: Align }
+  /** Base64 PNG/JPEG/BMP, dithered to black and white. */
+  | { type: "IMAGE"; data: string; align?: Align; maxWidthDots?: number }
+  | { type: "CUT"; partial?: boolean; feedLines?: number }
+  | { type: "DRAWER"; pin?: 0 | 1 }
+  /** Base64 ESC/POS bytes inserted verbatim. */
+  | { type: "RAW"; data: string };
+
+/** An ESC/POS receipt. */
+export interface ReceiptDocument {
+  /** Characters per line: 48 for 80 mm paper (default), 32 for 58 mm. */
+  widthChars?: number;
+  /** ibm437 (default), ibm850, ibm858, windows-1252, ibm866, … */
+  codePage?: string;
+  /** Cut at the end (default true). */
+  cut?: boolean;
+  openDrawer?: boolean;
+  items: ReceiptItem[];
+}
+
+export type DotMatrixItem =
+  | {
+      type: "LINE";
+      text: string;
+      bold?: boolean;
+      condensed?: boolean;
+      doubleWidth?: boolean;
+      underline?: boolean;
+      italic?: boolean;
+      doubleStrike?: boolean;
+    }
+  | { type: "LINE_FEED"; lines?: number }
+  | { type: "FORM_FEED" }
+  /** Base64 bytes sent verbatim (printer-specific escape sequences). */
+  | { type: "RAW"; data: string };
+
+/** ESC/P text for dot-matrix printers; never rasterised. */
+export interface DotMatrixDocument {
+  /** 10 (default), 12, 15, 17 or 20. */
+  cpi?: 10 | 12 | 15 | 17 | 20;
+  /** Lines per inch (default 6). */
+  lpi?: number;
+  pins?: 9 | 24;
+  quality?: "DRAFT" | "NLQ";
+  formLengthLines?: number;
+  formLengthInches?: number;
+  skipPerforationLines?: number;
+  leftMargin?: number;
+  rightMargin?: number;
+  encoding?: string;
+  characterTable?: number;
+  initialize?: boolean;
+  /** Finish with a form feed (default true). */
+  formFeed?: boolean;
+  lines: (string | DotMatrixItem)[];
 }

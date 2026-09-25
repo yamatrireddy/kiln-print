@@ -38,6 +38,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/print/pdf", post(print_pdf))
         .route("/print/html", post(print_html))
         .route("/print/image", post(print_image))
+        .route("/print/label", post(print_label))
+        .route("/print/receipt", post(print_receipt))
+        .route("/print/dotmatrix", post(print_dotmatrix))
         .route("/print/{kind}", post(print_unsupported))
         .route("/jobs", get(jobs))
         .route("/jobs/{id}", get(job).delete(cancel_job))
@@ -229,6 +232,41 @@ async fn print_image(State(s): State<Arc<AppState>>, Authed(p): Authed, bytes: B
     ok(
         StatusCode::ACCEPTED,
         service::submit_pending(&s, &p, pending).await?,
+    )
+}
+
+async fn print_label(State(s): State<Arc<AppState>>, Authed(p): Authed, bytes: Bytes) -> ApiResult {
+    let request =
+        body::<LabelPrintParams>(&bytes)?.into_request(s.config.limits.max_document_bytes)?;
+    ok(
+        StatusCode::ACCEPTED,
+        service::submit(&s, &p, request).await?,
+    )
+}
+
+async fn print_receipt(
+    State(s): State<Arc<AppState>>,
+    Authed(p): Authed,
+    bytes: Bytes,
+) -> ApiResult {
+    let request =
+        body::<ReceiptPrintParams>(&bytes)?.into_request(s.config.limits.max_document_bytes)?;
+    ok(
+        StatusCode::ACCEPTED,
+        service::submit(&s, &p, request).await?,
+    )
+}
+
+async fn print_dotmatrix(
+    State(s): State<Arc<AppState>>,
+    Authed(p): Authed,
+    bytes: Bytes,
+) -> ApiResult {
+    let request =
+        body::<DotMatrixPrintParams>(&bytes)?.into_request(s.config.limits.max_document_bytes)?;
+    ok(
+        StatusCode::ACCEPTED,
+        service::submit(&s, &p, request).await?,
     )
 }
 

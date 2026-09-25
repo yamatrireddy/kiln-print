@@ -871,6 +871,7 @@ dependencies = [
  "kiln-core",
  "kiln-protocols",
  "kiln-provider-mock",
+ "kiln-provider-tcp",
  "kiln-provider-windows",
  "kiln-renderers",
  "rusqlite",
@@ -910,7 +911,9 @@ dependencies = [
 name = "kiln-protocols"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "kiln-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -918,6 +921,18 @@ name = "kiln-provider-mock"
 version = "0.1.0"
 dependencies = [
  "kiln-core",
+]
+
+[[package]]
+name = "kiln-provider-tcp"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "kiln-core",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -943,6 +958,7 @@ dependencies = [
  "encoding_rs",
  "image",
  "kiln-core",
+ "kiln-protocols",
  "serde_json",
  "tracing",
  "tungstenite 0.29.0",

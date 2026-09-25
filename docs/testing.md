@@ -8,6 +8,8 @@
 | Windows spooler | `providers/windows/tests/spooler.rs` | Windows runners; spool-submitting tests are `#[ignore]` | enumeration stability, capabilities and queues of every printer, error mapping; ignored: GDI text → PDF, PDF rasterisation (copies, page range, A5 landscape), image placement, completion via change notifications (all to the Microsoft Print to PDF virtual printer), byte-exact RAW through a v3 driver; non-ignored: unknown paper and corrupt PDF rejected before spooling, default paper |
 | HTML rendering | `renderers/tests/html.rs` | yes, where a browser exists | `@page` size, page breaks, page ranges, footer templates, **no network or loopback access from documents** |
 | SDK | `sdk/typescript/test/*.test.ts` | yes (`cargo build -p kiln-agent`, then `npm test`) | handshake, all print helpers, typed errors, timeout plus safe retry by idempotency key, bad token without reconnect loop, **reconnect after agent restart with queued print delivered exactly once**, timestamp ordering |
+| Printer languages | `protocols/src/label/*.rs`, `escpos_commands.rs`, `escp_commands.rs`, `renderers/src/{label,receipt,dotmatrix}.rs` | yes | golden byte sequences for ZPL/EPL/TSPL/CPCL labels, ESC/POS and ESC/P commands, receipts (columns, cut, drawer, code pages), dithering, dot-matrix forms; **command-injection attempts print literally** |
+| Direct TCP | `providers/tcp/tests/tcp.rs` | yes | byte-exact delivery × copies to a fake 9100 printer, connection refused → `NOT_PRINTED`, fake ZPL `~HS` and ESC/POS `DLE EOT` status servers, unreachable → offline |
 | Hardware | `tests/hardware/README.md` | no (manual) | real office, Zebra, ESC/POS, dot-matrix and PDF printers |
 
 ## Commands

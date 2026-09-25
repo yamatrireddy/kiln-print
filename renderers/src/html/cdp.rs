@@ -73,6 +73,17 @@ impl Drop for Browser {
     }
 }
 
+/// Time a browser gets to start and accept the DevTools connection.
+const STARTUP_LIMIT: Duration = Duration::from_secs(10);
+
+/// Whether an error happened while the browser was starting (safe to retry).
+pub(crate) fn is_startup_failure(error: &PrintError) -> bool {
+    error
+        .details
+        .as_ref()
+        .is_some_and(|d| d["phase"] == "startup")
+}
+
 fn render_error(message: impl Into<String>) -> PrintError {
     PrintError::new(ErrorCode::PrintFailed, message).recoverable(false)
 }
@@ -126,8 +137,13 @@ pub(crate) fn print_to_pdf(
         })?;
     let _browser = Browser(child);
 
-    let endpoint = wait_for_endpoint(&profile.0, deadline)?;
-    let mut cdp = Cdp::connect(&endpoint, deadline, req.max_pdf_bytes)?;
+    // Startup has its own, shorter bound: a browser that has not published its DevTools
+    // endpoint within a few seconds is stuck, and the caller can retry with a new one.
+    let startup_deadline = deadline.min(Instant::now() + STARTUP_LIMIT);
+    let startup =
+        |e: PrintError| e.with_details(json!({ "outcome": "NOT_PRINTED", "phase": "startup" }));
+    let endpoint = wait_for_endpoint(&profile.0, startup_deadline).map_err(startup)?;
+    let mut cdp = Cdp::connect(&endpoint, deadline, req.max_pdf_bytes).map_err(startup)?;
 
     let target = cdp.call("Target.createTarget", json!({ "url": "about:blank" }))?;
     let target_id = target["targetId"]

@@ -5,6 +5,7 @@ members = [
     "protocols",
     "renderers",
     "providers/mock",
+    "providers/tcp",
     "providers/windows",
     "agent",
 ]
@@ -21,6 +22,7 @@ kiln-core = { path = "print-core" }
 kiln-protocols = { path = "protocols" }
 kiln-renderers = { path = "renderers" }
 kiln-provider-mock = { path = "providers/mock" }
+kiln-provider-tcp = { path = "providers/tcp" }
 kiln-provider-windows = { path = "providers/windows" }
 
 anyhow = "1"

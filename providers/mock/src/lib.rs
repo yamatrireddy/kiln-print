@@ -36,6 +36,7 @@ pub struct MockPrinter {
     pub raw: bool,
     pub text: bool,
     pub behavior: SubmitBehavior,
+    pub language: Option<String>,
     /// States returned by successive `job_state` calls for each spooled job; the last one
     /// repeats. Defaults to `Pending → Printing → Printed`.
     pub script: Vec<ProviderJobState>,
@@ -51,6 +52,7 @@ impl MockPrinter {
             raw: true,
             text: true,
             behavior: SubmitBehavior::Spool,
+            language: None,
             script: vec![
                 ProviderJobState::Pending,
                 ProviderJobState::Printing,
@@ -66,6 +68,11 @@ impl MockPrinter {
 
     pub fn connection(mut self, connection: ConnectionType) -> Self {
         self.connection = connection;
+        self
+    }
+
+    pub fn language(mut self, language: &str) -> Self {
+        self.language = Some(language.to_owned());
         self
     }
 
@@ -154,13 +161,18 @@ impl MockProvider {
                 .connection(ConnectionType::Network),
             MockPrinter::new("Mock Zebra ZD421")
                 .raw_only()
+                .language("ZPL")
                 .connection(ConnectionType::Usb),
             MockPrinter::new("Mock ESC/POS Receipt")
                 .raw_only()
+                .language("ESC/POS")
                 .connection(ConnectionType::Usb),
-            MockPrinter::new("Mock Epson LQ-590 Dot Matrix").connection(ConnectionType::Local),
+            MockPrinter::new("Mock Epson LQ-590 Dot Matrix")
+                .connection(ConnectionType::Local)
+                .language("ESC/P"),
             MockPrinter::new("Mock Direct TCP Label")
                 .raw_only()
+                .language("TSPL")
                 .connection(ConnectionType::Network)
                 .behavior(SubmitBehavior::Deliver),
         ])
@@ -235,6 +247,7 @@ impl MockProvider {
                 vec![PrinterCondition::Offline]
             },
             queued_jobs: Some(queued),
+            language: p.language.clone(),
             capabilities: None,
         }
     }

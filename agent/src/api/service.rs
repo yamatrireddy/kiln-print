@@ -68,6 +68,30 @@ pub async fn dispatch(
             )
             .await?,
         ),
+        "print.label" => to_json(
+            submit(
+                state,
+                who,
+                parse_params::<LabelPrintParams>(params)?.into_request(max)?,
+            )
+            .await?,
+        ),
+        "print.receipt" => to_json(
+            submit(
+                state,
+                who,
+                parse_params::<ReceiptPrintParams>(params)?.into_request(max)?,
+            )
+            .await?,
+        ),
+        "print.dotmatrix" => to_json(
+            submit(
+                state,
+                who,
+                parse_params::<DotMatrixPrintParams>(params)?.into_request(max)?,
+            )
+            .await?,
+        ),
         "print.pdf" => {
             let pending = parse_params::<PdfPrintParams>(params)?.into_pending()?;
             to_json(submit_pending(state, who, pending).await?)

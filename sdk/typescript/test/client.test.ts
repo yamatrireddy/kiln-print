@@ -90,6 +90,65 @@ describe("PrintClient", { skip }, () => {
     }
   });
 
+  test("labels, receipts and dot-matrix documents", async () => {
+    const zebra = (await client.getPrinters()).find((p) => p.name === "Mock Zebra ZD421")!;
+    assert.equal(zebra.language, "ZPL");
+    const jobs = [
+      await client.printLabel({
+        printer: zebra,
+        copies: 2,
+        label: {
+          widthMm: 100,
+          heightMm: 50,
+          elements: [
+            { type: "TEXT", xMm: 5, yMm: 5, text: "Ship to: Jane", heightMm: 5 },
+            { type: "BARCODE", xMm: 5, yMm: 15, symbology: "CODE128", data: "1Z999AA1" },
+            { type: "QR", xMm: 70, yMm: 5, data: "https://example.com/t/1", errorCorrection: "M" },
+          ],
+        },
+      }),
+      await client.printReceipt({
+        printer: "Mock ESC/POS Receipt",
+        receipt: {
+          widthChars: 32,
+          items: [
+            { type: "TEXT", text: "KILN CAFE", align: "CENTER", bold: true },
+            { type: "COLUMNS", left: "Latte", right: "3.80" },
+            { type: "CUT", partial: true },
+          ],
+        },
+      }),
+      await client.printDotMatrix({
+        printer: "Mock Epson LQ-590 Dot Matrix",
+        document: { cpi: 12, formLengthInches: 11, lines: ["INVOICE", { type: "LINE", text: "TOTAL", bold: true }] },
+      }),
+      await client.print({
+        type: "LABEL",
+        printer: "Mock Direct TCP Label",
+        label: { widthMm: 50, heightMm: 25, elements: [{ type: "BOX", xMm: 1, yMm: 1, widthMm: 48, heightMm: 23 }] },
+      }),
+    ];
+    const done = await Promise.all(jobs.map((j) => client.waitForJob(j.jobId, { timeoutMs: 10_000 })));
+    assert.deepEqual(
+      done.map((j) => [j.documentType, j.language, j.status]),
+      [
+        ["LABEL", "ZPL", "COMPLETED"],
+        ["RECEIPT", "ESC/POS", "COMPLETED"],
+        ["DOT_MATRIX", "ESC/P", "COMPLETED"],
+        ["LABEL", "TSPL", "COMPLETED"],
+      ],
+    );
+    try {
+      await client.printLabel({
+        printer: zebra,
+        label: { widthMm: 50, heightMm: 30, elements: [{ type: "BARCODE", xMm: 1, yMm: 1, symbology: "EAN13", data: "12" }] },
+      });
+      assert.fail("expected an error");
+    } catch (error) {
+      expectKilnError(error, "INVALID_PAYLOAD");
+    }
+  });
+
   test("agent errors map to KilnError with job context", async () => {
     try {
       await client.printRaw({ printer: "No Such Printer", data: "x" });

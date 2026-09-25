@@ -39,12 +39,25 @@
 | API: `print.pdf`, `print.image`, `print.html`, REST `/v1/print/{pdf,image,html}` | ✅ | `agent/src/api/` |
 | Decision record | ✅ | `docs/adr/0004-document-rendering.md` |
 
+## Phase 3: printer languages, dot-matrix, network RAW (this iteration)
+
+| Item | Status | Where |
+|---|---|---|
+| Language-neutral `LABEL` documents encoded as ZPL, EPL, TSPL or CPCL (text, 6 barcode symbologies, QR, Data Matrix, boxes, RAW) with injection-safe escaping | ✅ golden-tested | `print-core/src/model/label.rs`, `protocols/src/label/` |
+| ESC/POS `RECEIPT` documents: styles, columns, barcodes, QR, dithered logos, cut, drawer, code pages | ✅ | `renderers/src/receipt.rs`, `protocols/src/escpos_commands.rs` |
+| Dot-matrix `DOT_MATRIX` documents: CPI 10/12/15/17/20, LPI (native or n/180, n/216), draft/NLQ, form length, perforation skip, margins, bold/condensed/double-width/underline/italic/double-strike, character tables, raw escapes, multi-copy | ✅ never rasterised | `renderers/src/dotmatrix.rs`, `protocols/src/escp_commands.rs` |
+| Code pages IBM850/IBM858 (plus IBM437, WHATWG) | ✅ | `protocols/src/encoding.rs` |
+| Printer language hints (Windows driver heuristics, TCP config) | ✅ | `providers/windows/src/status.rs` |
+| Direct RAW TCP (9100) provider: admin-configured only, byte-exact, `BYTES_DELIVERED`, ZPL/ESC-POS device status | ✅ | `providers/tcp/` |
+| API `print.label` / `print.receipt` / `print.dotmatrix`, REST, SDK helpers | ✅ | `agent/src/api/`, `sdk/typescript/` |
+| Decision record | ✅ | `docs/adr/0005-label-receipt-dot-matrix-and-direct-tcp.md` |
+
 ## Later phases
 
 | Phase | Scope | Notes and first steps |
 |---|---|---|
 | 2 | ✅ Done (see above) | |
-| 3 | Label/receipt/dot-matrix **builders** (ZPL/EPL/TSPL/ESC/POS/ESC/P command builders, CPI/LPI/condensed/bold/form length), direct **TCP 9100** provider, opt-in device-status queries (`~HS`, `DLE EOT`) | Builders produce new documents; they never rewrite client bytes |
+| 3 | ✅ Done (see above) | |
 | 4 | TLS (`wss://localhost`), pairing with Allow once / Always / Deny, signed challenges, trusted clients in SQLite, revocation | Same `ClientAuthenticator` interface |
 | 5 | Dashboard (served by the agent, admin session), connected clients, queues, history with filters (application, printer, status, date), cancel | APIs already exist: `clients.list`, `queue.*`, `jobs.list` filters, `GET /v1/audit` |
 | 6 | `LinuxPrintProvider` (CUPS/IPP), `MacPrintProvider`, serial provider, installers (MSI/pkg/deb/rpm), autostart, tray, per-session ports | see `providers/linux/README.md`, `providers/macos/README.md` |

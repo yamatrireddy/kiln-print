@@ -16,9 +16,13 @@ use kiln_core::protocol::PrinterProtocol;
 
 mod bytes;
 pub mod cpcl;
+pub mod encoding;
 pub mod epl;
 pub mod escp;
+pub mod escp_commands;
 pub mod escpos;
+pub mod escpos_commands;
+pub mod label;
 pub mod raw;
 pub mod tspl;
 pub mod zpl;

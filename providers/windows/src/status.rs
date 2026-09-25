@@ -246,6 +246,42 @@ pub fn classify_connection(
     ConnectionType::Local
 }
 
+/// Printer command language suggested by the driver or queue name, if recognisable.
+///
+/// Only a hint: clients can always name the language explicitly. Order matters: Zebra's
+/// "ZDesigner … (EPL)" drivers speak EPL, the others ZPL.
+pub fn guess_language(name: &str, driver: &str) -> Option<&'static str> {
+    let text = format!("{name} {driver}").to_ascii_uppercase();
+    let has = |needle: &str| text.contains(needle);
+    if has("EPL") {
+        Some("EPL")
+    } else if has("ZPL") || has("ZDESIGNER") || has("ZEBRA") {
+        Some("ZPL")
+    } else if has("CPCL") {
+        Some("CPCL")
+    } else if has("TSPL") || text.starts_with("TSC ") || has(" TSC ") {
+        Some("TSPL")
+    } else if has("ESC/POS")
+        || has("ESCPOS")
+        || has("EPSON TM-")
+        || has(" TM-T")
+        || has("POS-58")
+        || has("POS-80")
+        || has("RECEIPT")
+    {
+        Some("ESC/POS")
+    } else if has("ESC/P")
+        || has("EPSON LQ")
+        || has("EPSON LX")
+        || has("EPSON FX")
+        || has("EPSON DFX")
+    {
+        Some("ESC/P")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +357,29 @@ mod tests {
 
         let (state, ..) = printer_state(printer::PAUSED, 0);
         assert_eq!(state, PrinterState::Paused);
+    }
+
+    #[test]
+    fn language_hints_from_drivers() {
+        assert_eq!(
+            guess_language("Dock", "ZDesigner ZD421-203dpi ZPL"),
+            Some("ZPL")
+        );
+        assert_eq!(
+            guess_language("Old Zebra", "ZDesigner LP 2844 (EPL)"),
+            Some("EPL")
+        );
+        assert_eq!(guess_language("TSC TE210", "TSC TE210"), Some("TSPL"));
+        assert_eq!(
+            guess_language("Front counter", "EPSON TM-T88V Receipt"),
+            Some("ESC/POS")
+        );
+        assert_eq!(guess_language("Invoices", "EPSON LQ-590"), Some("ESC/P"));
+        assert_eq!(
+            guess_language("Office", "HP Universal Printing PCL 6"),
+            None
+        );
+        assert_eq!(guess_language("Text", "Generic / Text Only"), None);
     }
 
     #[test]

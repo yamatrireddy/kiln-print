@@ -28,6 +28,7 @@ fn target() -> RenderTarget {
             status: PrinterState::Ready,
             conditions: vec![],
             queued_jobs: None,
+            language: None,
             capabilities: None,
         },
         accepted: vec![PayloadKind::Pdf],
@@ -176,4 +177,46 @@ fn documents_cannot_reach_the_network_or_loopback() {
             "the HTML document reached a local port"
         );
     }
+}
+
+/// Reliability check: many renders, several at a time, with per-render timings.
+/// `cargo test -p kiln-renderers --test html render_stress -- --ignored --nocapture`
+#[test]
+#[ignore = "stress test; launches many browsers"]
+fn render_stress() {
+    if !browser_tests_enabled() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let handles: Vec<_> = (0..4)
+        .map(|worker| {
+            std::thread::spawn(move || {
+                let mut times = Vec::new();
+                for i in 0..6 {
+                    let t = std::time::Instant::now();
+                    let ok = render(
+                        &format!("<h1>worker {worker} render {i}</h1>"),
+                        HtmlOptions::default(),
+                    )
+                    .is_some();
+                    times.push((t.elapsed().as_millis(), ok));
+                }
+                times
+            })
+        })
+        .collect();
+    let mut all: Vec<(u128, bool)> = handles
+        .into_iter()
+        .flat_map(|h| h.join().expect("worker"))
+        .collect();
+    all.sort_unstable();
+    println!(
+        "renders: {} in {:?}; fastest {} ms, median {} ms, slowest {} ms",
+        all.len(),
+        started.elapsed(),
+        all[0].0,
+        all[all.len() / 2].0,
+        all[all.len() - 1].0
+    );
+    assert!(all.iter().all(|(_, ok)| *ok));
 }

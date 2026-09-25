@@ -72,6 +72,15 @@ pub fn build_engine(
     if config.providers.windows {
         builder = builder.provider(Arc::new(kiln_provider_windows::WindowsPrintProvider::new()));
     }
+    if !config.network_printers.is_empty() {
+        builder = builder.provider(Arc::new(kiln_provider_tcp::TcpPrintProvider::new(
+            config
+                .network_printers
+                .iter()
+                .map(|p| p.to_provider_config())
+                .collect(),
+        )));
+    }
     if config.providers.mock {
         builder = builder.provider(Arc::new(kiln_provider_mock::MockProvider::demo()));
     }

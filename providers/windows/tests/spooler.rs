@@ -129,6 +129,7 @@ fn placeholder_printer() -> Printer {
         status: kiln_core::model::PrinterState::Unknown,
         conditions: vec![],
         queued_jobs: None,
+        language: None,
         capabilities: None,
     }
 }

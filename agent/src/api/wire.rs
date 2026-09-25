@@ -419,6 +419,106 @@ impl TextPrintParams {
     }
 }
 
+/// `print.label` / `POST /v1/print/label`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LabelPrintParams {
+    pub printer_id: Option<String>,
+    pub printer: Option<String>,
+    pub label: LabelDocument,
+    pub copies: Option<u32>,
+    pub job_name: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+/// `print.receipt` / `POST /v1/print/receipt`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReceiptPrintParams {
+    pub printer_id: Option<String>,
+    pub printer: Option<String>,
+    pub receipt: ReceiptDocument,
+    pub copies: Option<u32>,
+    pub job_name: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+/// `print.dotmatrix` / `POST /v1/print/dotmatrix`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DotMatrixPrintParams {
+    pub printer_id: Option<String>,
+    pub printer: Option<String>,
+    pub document: DotMatrixDocument,
+    pub copies: Option<u32>,
+    pub job_name: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+fn structured(
+    printer_id: Option<String>,
+    printer: Option<String>,
+    document: Document,
+    copies: Option<u32>,
+    job_name: Option<String>,
+    idempotency_key: Option<String>,
+    max_bytes: u64,
+) -> Result<PrintRequest, PrintError> {
+    let size = document.size_bytes();
+    if size > max_bytes {
+        return Err(too_large(size, max_bytes));
+    }
+    Ok(PrintRequest {
+        printer: selector(printer_id, printer)?,
+        document,
+        copies: copies.unwrap_or(1),
+        job_name,
+        idempotency_key,
+    })
+}
+
+impl LabelPrintParams {
+    pub fn into_request(self, max_bytes: u64) -> Result<PrintRequest, PrintError> {
+        structured(
+            self.printer_id,
+            self.printer,
+            Document::Label(self.label),
+            self.copies,
+            self.job_name,
+            self.idempotency_key,
+            max_bytes,
+        )
+    }
+}
+
+impl ReceiptPrintParams {
+    pub fn into_request(self, max_bytes: u64) -> Result<PrintRequest, PrintError> {
+        structured(
+            self.printer_id,
+            self.printer,
+            Document::Receipt(self.receipt),
+            self.copies,
+            self.job_name,
+            self.idempotency_key,
+            max_bytes,
+        )
+    }
+}
+
+impl DotMatrixPrintParams {
+    pub fn into_request(self, max_bytes: u64) -> Result<PrintRequest, PrintError> {
+        structured(
+            self.printer_id,
+            self.printer,
+            Document::DotMatrix(self.document),
+            self.copies,
+            self.job_name,
+            self.idempotency_key,
+            max_bytes,
+        )
+    }
+}
+
 /// A `print.submit` request split by document type.
 #[derive(Debug)]
 pub enum TypedPrint {
@@ -441,6 +541,15 @@ impl GenericPrintParams {
             )),
             "PDF" => Ok(TypedPrint::Pending(
                 parse_params::<PdfPrintParams>(rest)?.into_pending()?,
+            )),
+            "LABEL" => Ok(TypedPrint::Ready(
+                parse_params::<LabelPrintParams>(rest)?.into_request(max_bytes)?,
+            )),
+            "RECEIPT" => Ok(TypedPrint::Ready(
+                parse_params::<ReceiptPrintParams>(rest)?.into_request(max_bytes)?,
+            )),
+            "DOT_MATRIX" | "DOTMATRIX" => Ok(TypedPrint::Ready(
+                parse_params::<DotMatrixPrintParams>(rest)?.into_request(max_bytes)?,
             )),
             "IMAGE" => Ok(TypedPrint::Pending(
                 parse_params::<ImagePrintParams>(rest)?.into_pending()?,
