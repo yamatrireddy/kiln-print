@@ -367,7 +367,7 @@ async fn jobs_for_one_printer_keep_submission_order() {
         .iter()
         .map(|s| match &s.payload {
             PrintPayload::Raw(r) => r.bytes.clone(),
-            PrintPayload::Text(_) => unreachable!(),
+            other => panic!("unexpected payload {other:?}"),
         })
         .collect();
     assert_eq!(order, payloads.map(Bytes::from_static).to_vec());

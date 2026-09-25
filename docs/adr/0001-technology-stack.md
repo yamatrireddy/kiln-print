@@ -1,6 +1,6 @@
 # ADR 0001 — Technology stack
 
-- **Status:** Accepted
+- **Status:** Accepted. The PDF/HTML rendering choices were revised in [ADR 0004](0004-document-rendering.md).
 - **Date:** 2026-09-25
 - **Deciders:** Kiln Print maintainers
 

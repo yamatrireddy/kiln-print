@@ -94,6 +94,22 @@ pub fn job_state(flags: u32, status_text: Option<String>) -> ProviderJobState {
     ProviderJobState::Pending
 }
 
+/// Combines the job's current status (if it is still queued) with every status bit the
+/// change-notification watcher observed during its life.
+pub fn resolve_job_state(
+    current: Option<(u32, Option<String>)>,
+    observed: u32,
+) -> ProviderJobState {
+    use job::*;
+    let printed_bits = observed & (PRINTED | COMPLETE);
+    match current {
+        Some((flags, text)) => job_state(flags | printed_bits, text),
+        None if printed_bits != 0 => ProviderJobState::Printed,
+        None if observed & (DELETING | DELETED) != 0 => ProviderJobState::Cancelled,
+        None => ProviderJobState::Gone,
+    }
+}
+
 /// Human-readable flag names for queue listings.
 pub fn job_flag_names(flags: u32) -> Vec<String> {
     use job::*;
@@ -259,6 +275,32 @@ mod tests {
                 message: Some(_)
             }
         ));
+    }
+
+    #[test]
+    fn observed_history_disambiguates_vanished_jobs() {
+        assert_eq!(resolve_job_state(None, 0), ProviderJobState::Gone);
+        assert_eq!(
+            resolve_job_state(None, job::PRINTING | job::PRINTED),
+            ProviderJobState::Printed
+        );
+        assert_eq!(
+            resolve_job_state(None, job::PRINTING | job::DELETING),
+            ProviderJobState::Cancelled
+        );
+        assert_eq!(
+            resolve_job_state(None, job::PRINTED | job::DELETING),
+            ProviderJobState::Printed,
+            "a printed job being cleaned up is not a cancellation"
+        );
+        assert_eq!(
+            resolve_job_state(Some((job::DELETING, None)), job::COMPLETE),
+            ProviderJobState::Printed
+        );
+        assert_eq!(
+            resolve_job_state(Some((job::PRINTING, None)), 0),
+            ProviderJobState::Printing
+        );
     }
 
     #[test]

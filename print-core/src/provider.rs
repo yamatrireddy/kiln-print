@@ -5,13 +5,16 @@
 //! engine runs every provider call on a bounded blocking pool so a stuck driver can never
 //! stall the async runtime or another printer's queue.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::error::{ErrorCode, PrintError, Result};
 use crate::model::{
-    Job, JobId, MarginsMm, Orientation, Printer, PrinterCapabilities, TextAlignment,
+    Align, Job, JobId, MarginsMm, Orientation, PageRanges, PageSetup, Placement, Printer,
+    PrinterCapabilities, TextAlignment,
 };
 
 /// Anything that can enumerate printers. Every [`PrintProvider`] is one; standalone
@@ -28,6 +31,10 @@ pub enum PrintPayload {
     Raw(RawPayload),
     /// Logical text laid out and drawn by the platform graphics stack.
     Text(TextLayout),
+    /// A PDF document, rasterised or passed through natively by the provider.
+    Pdf(PdfPayload),
+    /// A decoded raster image placed on a page by the provider.
+    Image(ImagePayload),
 }
 
 impl PrintPayload {
@@ -35,6 +42,8 @@ impl PrintPayload {
         match self {
             Self::Raw(_) => PayloadKind::Raw,
             Self::Text(_) => PayloadKind::Text,
+            Self::Pdf(_) => PayloadKind::Pdf,
+            Self::Image(_) => PayloadKind::Image,
         }
     }
 }
@@ -43,10 +52,12 @@ impl PrintPayload {
 pub enum PayloadKind {
     Raw,
     Text,
+    Pdf,
+    Image,
 }
 
 impl PayloadKind {
-    pub const ALL: [Self; 2] = [Self::Raw, Self::Text];
+    pub const ALL: [Self; 4] = [Self::Raw, Self::Text, Self::Pdf, Self::Image];
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +79,58 @@ pub struct TextLayout {
     pub margins_mm: MarginsMm,
     pub orientation: Option<Orientation>,
     pub wrap: bool,
+}
+
+/// A validated PDF plus how to print it.
+#[derive(Debug, Clone)]
+pub struct PdfPayload {
+    pub bytes: Bytes,
+    /// Pages to print; all pages when `None`.
+    pub pages: Option<PageRanges>,
+    pub placement: Placement,
+    pub setup: PageSetup,
+    /// Upper bound for rasterisation resolution, if the provider rasterises.
+    pub max_dpi: u32,
+}
+
+/// 8-bit RGB pixels, row-major, no padding.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RasterImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgb: Vec<u8>,
+    /// Physical resolution used for actual-size placement.
+    pub dpi_x: u32,
+    pub dpi_y: u32,
+}
+
+impl std::fmt::Debug for RasterImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RasterImage")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("dpi", &(self.dpi_x, self.dpi_y))
+            .finish_non_exhaustive()
+    }
+}
+
+impl RasterImage {
+    /// Physical size in inches.
+    pub fn size_in(&self) -> (f64, f64) {
+        (
+            f64::from(self.width) / f64::from(self.dpi_x.max(1)),
+            f64::from(self.height) / f64::from(self.dpi_y.max(1)),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImagePayload {
+    /// Shared so copies and retries of the same page never duplicate pixel buffers.
+    pub image: Arc<RasterImage>,
+    pub placement: Placement,
+    pub align: Align,
+    pub setup: PageSetup,
 }
 
 /// Everything a provider needs to submit one job.
@@ -135,6 +198,12 @@ pub trait PrintProvider: PrinterDiscoveryProvider {
 
     /// Whether this printer can accept the payload kind through this provider.
     fn supports(&self, printer: &Printer, kind: PayloadKind) -> bool;
+
+    /// Size of the printer's current default paper in millimetres (portrait), if known.
+    /// Used to lay out content that is paginated before printing (HTML).
+    fn default_paper_mm(&self, _printer: &Printer) -> Option<(f32, f32)> {
+        None
+    }
 
     /// Submits a complete job. Must be all-or-nothing where the platform allows it: on
     /// failure the provider aborts the partial spool job so nothing half-prints.

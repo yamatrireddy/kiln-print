@@ -28,3 +28,26 @@ jobs:
       # CI-safe tests only: mock provider plus read-only spooler queries. Tests that submit
       # spool jobs are #[ignore] and run on dedicated machines (tests/hardware).
       - run: cargo test --workspace
+
+  sdk:
+    name: typescript sdk
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      # The SDK tests run against a real agent with simulated printers.
+      - run: cargo build -p kiln-agent
+      - run: npm ci
+        working-directory: sdk/typescript
+      - run: npm run typecheck
+        working-directory: sdk/typescript
+      - run: npm run build
+        working-directory: sdk/typescript
+      - run: npm test
+        working-directory: sdk/typescript

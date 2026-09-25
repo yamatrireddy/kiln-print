@@ -196,6 +196,7 @@ mod tests {
                 capabilities: None,
             },
             accepted: vec![PayloadKind::Raw, PayloadKind::Text],
+            default_paper_mm: None,
         }
     }
 

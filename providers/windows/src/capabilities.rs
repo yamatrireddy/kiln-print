@@ -2,12 +2,15 @@
 //! answer (returns -1 or 0 entries) is reported as unknown (`None`), never guessed.
 
 use kiln_core::model::{Orientation, PaperSize, PrinterCapabilities, Resolution, Tray};
+use windows::Win32::Graphics::Gdi::{
+    CreateICW, DeleteDC, GetDeviceCaps, LOGPIXELSX, LOGPIXELSY, PHYSICALHEIGHT, PHYSICALWIDTH,
+};
 use windows::Win32::Storage::Xps::{
     DC_BINNAMES, DC_BINS, DC_COLLATE, DC_COLORDEVICE, DC_COPIES, DC_DUPLEX, DC_ENUMRESOLUTIONS,
     DC_ORIENTATION, DC_PAPERNAMES, DC_PAPERS, DC_PAPERSIZE, DeviceCapabilitiesW,
     PRINTER_DEVICE_CAPABILITIES,
 };
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::{PCWSTR, PWSTR, w};
 
 use crate::ffi::wide;
 
@@ -149,4 +152,30 @@ pub(crate) fn query(printer_name: &str, port: Option<&str>) -> PrinterCapabiliti
         datatypes: None,
         document_types: Vec::new(),
     }
+}
+
+/// The paper of the printer's default settings, portrait, in millimetres. Uses an
+/// information context (no job is created).
+pub(crate) fn default_paper_mm(printer_name: &str) -> Option<(f32, f32)> {
+    let name = wide(printer_name);
+    // SAFETY: null-terminated strings; the IC is deleted below.
+    let ic = unsafe { CreateICW(w!("WINSPOOL"), PCWSTR(name.as_ptr()), PCWSTR::null(), None) };
+    if ic.is_invalid() {
+        return None;
+    }
+    // SAFETY: valid IC.
+    let cap = |index| unsafe { GetDeviceCaps(Some(ic), index) };
+    let (w, h, dx, dy) = (
+        cap(PHYSICALWIDTH),
+        cap(PHYSICALHEIGHT),
+        cap(LOGPIXELSX),
+        cap(LOGPIXELSY),
+    );
+    // SAFETY: created above, deleted once.
+    let _ = unsafe { DeleteDC(ic) };
+    if w <= 0 || h <= 0 || dx <= 0 || dy <= 0 {
+        return None;
+    }
+    let (w_mm, h_mm) = (w as f32 / dx as f32 * 25.4, h as f32 / dy as f32 * 25.4);
+    Some((w_mm.min(h_mm), w_mm.max(h_mm)))
 }

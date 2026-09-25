@@ -702,9 +702,29 @@ impl PrintEngine {
         let renderer = inner.renderers.get(document_type).cloned().ok_or_else(|| {
             PrintError::new(
                 ErrorCode::UnsupportedDocument,
-                format!("document type {document_type:?} is not supported by this agent"),
+                format!(
+                    "document type {} is not supported by this agent",
+                    document_type.as_str()
+                ),
             )
         })?;
+        // Refuse before doing any work (HTML rendering launches a browser) when the
+        // printer cannot take anything this renderer produces.
+        if !renderer
+            .output_kinds()
+            .iter()
+            .any(|k| provider.supports(&printer, *k))
+        {
+            return Err(PrintError::new(
+                ErrorCode::UnsupportedDocument,
+                format!(
+                    "printer '{}' cannot print {} documents",
+                    printer.name,
+                    document_type.as_str()
+                ),
+            )
+            .with_printer(printer.id.as_str()));
+        }
         renderer.validate(&request.document)?;
 
         let target = RenderTarget {
@@ -713,9 +733,16 @@ impl PrintEngine {
                 .filter(|k| provider.supports(&printer, *k))
                 .collect(),
             printer: printer.clone(),
+            default_paper_mm: None,
         };
         let document = request.document;
+        let needs_paper = document_type == DocumentType::Html;
+        let paper_provider = provider.clone();
         let payload: PrintPayload = blocking(&inner.render_permits, move || {
+            let mut target = target;
+            if needs_paper {
+                target.default_paper_mm = paper_provider.default_paper_mm(&target.printer);
+            }
             renderer.render(document, &target)
         })
         .await?;

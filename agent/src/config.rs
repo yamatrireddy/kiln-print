@@ -24,6 +24,8 @@ pub struct AgentConfig {
     pub jobs: JobsConfig,
     pub discovery: DiscoveryConfig,
     pub providers: ProvidersConfig,
+    pub html: HtmlSettings,
+    pub sources: SourcesConfig,
     pub storage: StorageConfig,
     pub logging: LoggingConfig,
 }
@@ -206,6 +208,48 @@ impl Default for ProvidersConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct HtmlSettings {
+    /// Edge/Chrome/Chromium executable; auto-detected when absent.
+    pub browser_path: Option<PathBuf>,
+    /// Allow JavaScript in printed HTML. Network access stays blocked regardless.
+    pub javascript: bool,
+    pub timeout_secs: u64,
+}
+
+impl Default for HtmlSettings {
+    fn default() -> Self {
+        Self {
+            browser_path: None,
+            javascript: false,
+            timeout_secs: 30,
+        }
+    }
+}
+
+/// Where PDF and image documents may be loaded from besides inline data. Both lists are
+/// empty by default, which disables `path` and `url` sources entirely.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SourcesConfig {
+    /// Absolute folders whose files may be printed by path.
+    pub allowed_paths: Vec<PathBuf>,
+    /// URL prefixes documents may be fetched from; each must end with `/`.
+    pub allowed_url_prefixes: Vec<String>,
+    pub fetch_timeout_secs: u64,
+}
+
+impl Default for SourcesConfig {
+    fn default() -> Self {
+        Self {
+            allowed_paths: Vec::new(),
+            allowed_url_prefixes: Vec::new(),
+            fetch_timeout_secs: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct StorageConfig {
     /// Database, token and log location. Defaults to the per-user local data directory.
     pub data_dir: Option<PathBuf>,
@@ -294,6 +338,27 @@ impl AgentConfig {
                 "invalid admin origin '{origin}'"
             );
         }
+        for path in &self.sources.allowed_paths {
+            ensure!(
+                path.is_absolute(),
+                "sources.allowed_paths entry '{}' must be absolute",
+                path.display()
+            );
+        }
+        for prefix in &self.sources.allowed_url_prefixes {
+            let valid = (prefix.starts_with("https://") || prefix.starts_with("http://"))
+                && prefix.ends_with('/')
+                && prefix
+                    .split("://")
+                    .nth(1)
+                    .is_some_and(|rest| rest.len() > 1 && !rest.starts_with('/'))
+                && !prefix.contains(['@', '\\', ' ']);
+            ensure!(
+                valid,
+                "sources.allowed_url_prefixes entry '{prefix}' must be an http(s) URL ending with '/' (e.g. https://files.example.com/labels/)"
+            );
+        }
+        ensure!(self.html.timeout_secs > 0, "html.timeout_secs must be > 0");
         let mut ids = HashSet::new();
         for client in &self.security.clients {
             ensure!(
@@ -414,6 +479,20 @@ mod tests {
 
         let typo = "[server]\nbnid = \"127.0.0.1:1\"\n";
         assert!(toml::from_str::<AgentConfig>(typo).is_err());
+    }
+
+    #[test]
+    fn source_allowlists_are_validated() {
+        let mut config = AgentConfig::default();
+        config.sources.allowed_url_prefixes = vec!["https://files.example.com".into()];
+        assert!(
+            config.validate().is_err(),
+            "prefix without trailing slash could match evil hosts"
+        );
+        config.sources.allowed_url_prefixes = vec!["https://files.example.com/labels/".into()];
+        assert!(config.validate().is_ok());
+        config.sources.allowed_paths = vec!["relative/dir".into()];
+        assert!(config.validate().is_err());
     }
 
     #[test]

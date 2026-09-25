@@ -37,14 +37,13 @@ pub async fn dispatch(
             let p: PrinterParams = parse_params(params)?;
             to_json(capabilities(state, who, &selector(p.printer_id, p.printer)?).await?)
         }
-        "print.submit" => to_json(
-            submit(
-                state,
-                who,
-                parse_params::<GenericPrintParams>(params)?.into_request(max)?,
-            )
-            .await?,
-        ),
+        "print.submit" => {
+            who.require(Permission::Print)?;
+            match parse_params::<GenericPrintParams>(params)?.into_typed(max)? {
+                TypedPrint::Ready(request) => to_json(submit(state, who, request).await?),
+                TypedPrint::Pending(pending) => to_json(submit_pending(state, who, pending).await?),
+            }
+        }
         "print.raw" => to_json(
             submit(
                 state,
@@ -61,6 +60,22 @@ pub async fn dispatch(
             )
             .await?,
         ),
+        "print.html" => to_json(
+            submit(
+                state,
+                who,
+                parse_params::<HtmlPrintParams>(params)?.into_request(max)?,
+            )
+            .await?,
+        ),
+        "print.pdf" => {
+            let pending = parse_params::<PdfPrintParams>(params)?.into_pending()?;
+            to_json(submit_pending(state, who, pending).await?)
+        }
+        "print.image" => {
+            let pending = parse_params::<ImagePrintParams>(params)?.into_pending()?;
+            to_json(submit_pending(state, who, pending).await?)
+        }
         "jobs.list" => to_json(list_jobs(state, who, parse_params(params)?)?),
         "jobs.get" => to_json(get_job(
             state,
@@ -159,6 +174,19 @@ pub async fn capabilities(
 pub async fn submit(state: &AppState, who: &Principal, request: PrintRequest) -> Result<Job> {
     who.require(Permission::Print)?;
     state.engine.submit(&who.submitter(), request).await
+}
+
+/// Resolves a `path`/`url`/inline source, then submits. Permission is checked first so an
+/// unprivileged client can never make the agent read files or fetch URLs.
+pub async fn submit_pending(
+    state: &AppState,
+    who: &Principal,
+    pending: PendingRequest,
+) -> Result<Job> {
+    who.require(Permission::Print)?;
+    let max = state.config.limits.max_document_bytes;
+    let data = crate::sources::resolve(&state.config.sources, pending.source.clone(), max).await?;
+    submit(state, who, pending.complete(data)).await
 }
 
 // ------------------------------------------------------------------ jobs

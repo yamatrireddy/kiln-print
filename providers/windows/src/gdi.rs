@@ -6,21 +6,20 @@
 use std::path::Path;
 
 use kiln_core::error::PrintError;
-use kiln_core::model::{Orientation, TextAlignment};
+use kiln_core::model::TextAlignment;
 use kiln_core::provider::TextLayout;
 use windows::Win32::Foundation::SIZE;
 use windows::Win32::Graphics::Gdi::{
-    CreateDCW, CreateFontIndirectW, DEFAULT_CHARSET, DEVMODEW, DM_IN_BUFFER, DM_ORIENTATION,
-    DM_OUT_BUFFER, DeleteDC, DeleteObject, FW_BOLD, FW_NORMAL, GetDeviceCaps,
-    GetTextExtentPoint32W, GetTextMetricsW, HDC, HGDIOBJ, HORZRES, LOGFONTW, LOGPIXELSX,
-    LOGPIXELSY, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY, PHYSICALWIDTH, PROOF_QUALITY,
-    SelectObject, SetBkMode, TEXTMETRICW, TRANSPARENT, TextOutW, VERTRES,
+    CreateDCW, CreateFontIndirectW, DEFAULT_CHARSET, DEVMODEW, DeleteDC, DeleteObject, FW_BOLD,
+    FW_NORMAL, GetDeviceCaps, GetTextExtentPoint32W, GetTextMetricsW, HDC, HGDIOBJ, HORZRES,
+    LOGFONTW, LOGPIXELSX, LOGPIXELSY, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY,
+    PHYSICALWIDTH, PROOF_QUALITY, SelectObject, SetBkMode, TEXTMETRICW, TRANSPARENT, TextOutW,
+    VERTRES,
 };
-use windows::Win32::Graphics::Printing::DocumentPropertiesW;
 use windows::Win32::Storage::Xps::{AbortDoc, DOCINFOW, EndDoc, EndPage, StartDocW, StartPage};
 use windows::core::{PCWSTR, w};
 
-use crate::ffi::{Buffer, PrinterHandle, PrinterNameExt, map_error, wide};
+use crate::ffi::{PrinterNameExt, map_error, wide};
 use crate::layout;
 
 const DEFAULT_FONT: &str = "Courier New";
@@ -56,7 +55,12 @@ pub(crate) fn submit(
     output_file: Option<&Path>,
 ) -> Result<u32, PrintError> {
     let name_w = wide(printer_name);
-    let devmode = devmode_for(printer_name, &name_w, text.orientation);
+    let devmode = crate::devmode::build(
+        printer_name,
+        None,
+        &kiln_core::model::PageSetup::default(),
+        text.orientation,
+    )?;
     let devmode_ptr = devmode.as_ref().map(|b| b.as_ptr::<DEVMODEW>());
 
     // SAFETY: strings are null-terminated; the DEVMODE buffer outlives the call.
@@ -263,47 +267,6 @@ impl Drop for Selected<'_> {
         // SAFETY: valid DC and the object that was selected before.
         unsafe { SelectObject(self.dc.0, self.previous) };
     }
-}
-
-/// Builds a DEVMODE with the requested orientation merged through the driver. Returns
-/// `None` (use driver defaults) when no override is needed or the driver refuses.
-fn devmode_for(
-    printer_name: &str,
-    name_w: &[u16],
-    orientation: Option<Orientation>,
-) -> Option<Buffer> {
-    let orientation = orientation?;
-    let handle = PrinterHandle::open(printer_name).ok()?;
-    let name = PCWSTR(name_w.as_ptr());
-    // SAFETY: fMode 0 returns the required DEVMODE size.
-    let size = unsafe { DocumentPropertiesW(None, handle.raw(), name, None, None, 0) };
-    let mut buffer = Buffer::new(usize::try_from(size).ok().filter(|s| *s > 0)?);
-    let dm = buffer.as_mut_ptr::<DEVMODEW>();
-    // SAFETY: `buffer` has the size the driver asked for.
-    if unsafe { DocumentPropertiesW(None, handle.raw(), name, Some(dm), None, DM_OUT_BUFFER.0) } < 0
-    {
-        return None;
-    }
-    // SAFETY: `dm` points at a DEVMODEW the driver just initialised.
-    unsafe {
-        (*dm).Anonymous1.Anonymous1.dmOrientation = match orientation {
-            Orientation::Portrait => 1,
-            Orientation::Landscape => 2,
-        };
-        (*dm).dmFields |= DM_ORIENTATION;
-    }
-    // SAFETY: in/out DEVMODE is the same valid buffer, as the API permits.
-    let merged = unsafe {
-        DocumentPropertiesW(
-            None,
-            handle.raw(),
-            name,
-            Some(dm),
-            Some(dm),
-            DM_IN_BUFFER.0 | DM_OUT_BUFFER.0,
-        )
-    };
-    (merged >= 0).then_some(buffer)
 }
 
 fn last_error(context: &str, printer: &str) -> PrintError {

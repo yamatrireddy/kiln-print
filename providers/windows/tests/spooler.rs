@@ -219,3 +219,270 @@ fn raw_job_reaches_the_port_byte_for_byte() {
     );
     let _ = std::fs::remove_file(&output);
 }
+
+// ------------------------------------------------------------------ Phase 2
+
+use kiln_core::model::{Align, Orientation, PageSetup, PaperRequest, Placement};
+
+fn pdf_printer(provider: &WindowsPrintProvider) -> Option<Printer> {
+    let name =
+        std::env::var("KILN_TEST_PDF_PRINTER").unwrap_or_else(|_| "Microsoft Print to PDF".into());
+    let printer = find(provider, &name);
+    if printer.is_none() {
+        eprintln!("skipping: printer '{name}' not installed");
+    }
+    printer
+}
+
+/// A minimal, valid PDF: page 1 Letter portrait, page 2 Letter landscape.
+fn two_page_pdf() -> Vec<u8> {
+    let content =
+        |text: &str| format!("BT /F1 36 Tf 72 400 Td ({text}) Tj ET 0 0 1 rg 72 72 200 100 re f");
+    let c1 = content("Kiln page one");
+    let c2 = content("Kiln page two");
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{c1}\nendstream", c1.len()),
+        format!("<< /Length {} >>\nstream\n{c2}\nendstream", c2.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+    );
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    pdf
+}
+
+/// Page count and MediaBoxes of a PDF written by Microsoft Print to PDF.
+fn pdf_pages(pdf: &[u8]) -> (usize, Vec<Vec<f64>>) {
+    let text = String::from_utf8_lossy(pdf);
+    let count = |pat: &str| text.matches(pat).count();
+    let pages =
+        count("/Type /Page") + count("/Type/Page") - count("/Type /Pages") - count("/Type/Pages");
+    let boxes = text
+        .match_indices("/MediaBox")
+        .map(|(i, m)| {
+            let rest = &text[i + m.len()..];
+            let rest = &rest[rest.find('[').map_or(0, |p| p + 1)..];
+            rest[..rest.find(']').unwrap_or(0)]
+                .split_whitespace()
+                .filter_map(|n| n.parse().ok())
+                .collect()
+        })
+        .collect();
+    (pages, boxes)
+}
+
+fn wait_for_terminal(
+    provider: &WindowsPrintProvider,
+    printer: &Printer,
+    id: u64,
+) -> ProviderJobState {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = provider.job_state(printer, id).expect("job state");
+        if matches!(
+            state,
+            ProviderJobState::Printed
+                | ProviderJobState::Gone
+                | ProviderJobState::Cancelled
+                | ProviderJobState::Failed(_)
+        ) {
+            return state;
+        }
+        assert!(Instant::now() < deadline, "job never finished: {state:?}");
+        // Deliberately slow polling: the watcher must remember what happened in between.
+        std::thread::sleep(Duration::from_millis(1500));
+    }
+}
+
+fn pdf_spec(bytes: Vec<u8>, pages: Option<&str>, setup: PageSetup, copies: u32) -> SubmitSpec {
+    SubmitSpec {
+        job_id: job_id(),
+        document_name: "Kiln PDF test".into(),
+        copies,
+        payload: PrintPayload::Pdf(PdfPayload {
+            bytes: Bytes::from(bytes),
+            pages: pages.map(|p| kiln_core::model::PageRanges::parse(p).expect("range")),
+            placement: Placement::ShrinkToFit,
+            setup,
+            max_dpi: 150,
+        }),
+    }
+}
+
+#[test]
+#[ignore = "submits a real spool job (virtual printer, output to a temp file)"]
+fn pdf_job_rasterises_through_the_spooler_and_completion_is_observed() {
+    let provider = WindowsPrintProvider::new();
+    let Some(printer) = pdf_printer(&provider) else {
+        return;
+    };
+    let output = temp_output("pdf.pdf");
+    let spec = pdf_spec(two_page_pdf(), None, PageSetup::default(), 2);
+    let SubmitOutcome::Spooled { spooler_job_id } = provider
+        .submit_to_file(&printer, &spec, &output)
+        .expect("spooled")
+    else {
+        panic!("expected spooled")
+    };
+    let (pages, _) = pdf_pages(&wait_for_file(&output));
+    assert_eq!(pages, 4, "2 pages x 2 copies");
+    // Let Windows remove the finished job from the queue. From here on only the
+    // change-notification history can tell "printed" apart from "vanished".
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(
+        provider
+            .queue(&printer)
+            .expect("queue")
+            .iter()
+            .all(|e| e.spooler_job_id != spooler_job_id),
+        "job should have left the queue"
+    );
+    assert_eq!(
+        wait_for_terminal(&provider, &printer, spooler_job_id),
+        ProviderJobState::Printed
+    );
+    let _ = std::fs::remove_file(&output);
+}
+
+#[test]
+#[ignore = "submits a real spool job (virtual printer, output to a temp file)"]
+fn pdf_page_range_and_page_setup_are_applied() {
+    let provider = WindowsPrintProvider::new();
+    let Some(printer) = pdf_printer(&provider) else {
+        return;
+    };
+    let output = temp_output("pdf-a5.pdf");
+    let setup = PageSetup {
+        paper_size: Some(PaperRequest::Named("A5".into())),
+        orientation: Some(Orientation::Landscape),
+        ..PageSetup::default()
+    };
+    let spec = pdf_spec(two_page_pdf(), Some("2"), setup, 1);
+    provider
+        .submit_to_file(&printer, &spec, &output)
+        .expect("spooled");
+    let (pages, boxes) = pdf_pages(&wait_for_file(&output));
+    assert_eq!(pages, 1, "only page 2");
+    // A5 landscape is 595 x 420 pt.
+    assert!(
+        boxes
+            .iter()
+            .any(|b| b.len() == 4 && (b[2] - 595.0).abs() < 3.0 && (b[3] - 420.0).abs() < 3.0),
+        "A5 landscape page expected, got {boxes:?}"
+    );
+    let _ = std::fs::remove_file(&output);
+}
+
+#[test]
+#[ignore = "submits a real spool job (virtual printer, output to a temp file)"]
+fn image_job_prints_through_the_spooler() {
+    let provider = WindowsPrintProvider::new();
+    let Some(printer) = pdf_printer(&provider) else {
+        return;
+    };
+    let output = temp_output("image.pdf");
+    let (w, h) = (300u32, 150u32);
+    let rgb = (0..w * h)
+        .flat_map(|i| {
+            if (i % w) < w / 2 {
+                [200, 0, 0]
+            } else {
+                [0, 0, 200]
+            }
+        })
+        .collect();
+    let spec = SubmitSpec {
+        job_id: job_id(),
+        document_name: "Kiln image test".into(),
+        copies: 2,
+        payload: PrintPayload::Image(ImagePayload {
+            image: std::sync::Arc::new(RasterImage {
+                width: w,
+                height: h,
+                rgb,
+                dpi_x: 100,
+                dpi_y: 100,
+            }),
+            placement: Placement::ActualSize,
+            align: Align::Center,
+            setup: PageSetup::default(),
+        }),
+    };
+    provider
+        .submit_to_file(&printer, &spec, &output)
+        .expect("spooled");
+    let (pages, boxes) = pdf_pages(&wait_for_file(&output));
+    assert_eq!(pages, 2);
+    assert!(
+        boxes.iter().all(|b| b.len() == 4 && b[2] > b[3]),
+        "3x1.5 in image auto-selects landscape: {boxes:?}"
+    );
+    let _ = std::fs::remove_file(&output);
+}
+
+#[test]
+fn unsupported_paper_is_rejected_before_printing() {
+    let provider = WindowsPrintProvider::new();
+    let Some(printer) = pdf_printer(&provider) else {
+        return;
+    };
+    let setup = PageSetup {
+        paper_size: Some(PaperRequest::Named("Imperial Foolscap".into())),
+        ..PageSetup::default()
+    };
+    let output = temp_output("never.pdf");
+    let err = provider
+        .submit_to_file(&printer, &pdf_spec(two_page_pdf(), None, setup, 1), &output)
+        .expect_err("unknown paper");
+    assert_eq!(err.error_code, kiln_core::ErrorCode::InvalidPayload);
+    assert!(err.message.contains("available"), "{}", err.message);
+    assert!(!output.exists(), "nothing was spooled");
+}
+
+#[test]
+fn corrupt_pdf_is_rejected_before_printing() {
+    let provider = WindowsPrintProvider::new();
+    let Some(printer) = pdf_printer(&provider) else {
+        return;
+    };
+    let output = temp_output("never2.pdf");
+    let err = provider
+        .submit_to_file(
+            &printer,
+            &pdf_spec(b"%PDF-1.7 garbage".to_vec(), None, PageSetup::default(), 1),
+            &output,
+        )
+        .expect_err("corrupt");
+    assert_eq!(err.error_code, kiln_core::ErrorCode::InvalidPayload);
+}
+
+#[test]
+fn default_paper_is_reported() {
+    let provider = WindowsPrintProvider::new();
+    let Some(printer) = pdf_printer(&provider) else {
+        return;
+    };
+    let (w, h) = provider.default_paper_mm(&printer).expect("default paper");
+    assert!(w > 50.0 && h >= w, "{w} x {h}");
+}
