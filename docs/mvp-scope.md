@@ -25,11 +25,25 @@
 
 **Explicitly not in Phase 1:** TLS, pairing/consent UI, PDF/HTML/image, TypeScript SDK, dashboard, direct TCP/serial, Linux/macOS, installers.
 
+## Phase 2: documents and SDK (this iteration)
+
+| Item | Status | Where |
+|---|---|---|
+| PDF printing without a viewer: page range, scale, orientation, paper, duplex, colour, tray, copies | ✅ Windows `Windows.Data.Pdf` → GDI | `renderers/src/pdf.rs`, `providers/windows/src/{pdf,raster,devmode}.rs` |
+| Image printing: PNG, JPEG, BMP, TIFF, GIF; original/fit/shrink/fill, scale, rotate, DPI, align, paper | ✅ | `renderers/src/image.rs`, `print-core/src/model/page.rs` |
+| HTML/CSS printing: CSS, `@page` size/margins, page breaks, headers/footers, fonts, SVG barcodes; sandboxed, no JavaScript, no network | ✅ headless Edge/Chrome over DevTools | `renderers/src/html/` |
+| Document sources: inline, path, URL (admin allow-lists) | ✅ disabled by default | `agent/src/sources.rs` |
+| Printer capabilities (full) and default paper | ✅ | `providers/windows/src/capabilities.rs` |
+| Job monitoring via spooler change notifications | ✅ printed-vs-deleted after the job leaves the queue | `providers/windows/src/watch.rs` |
+| TypeScript SDK with reconnection, idempotent resend, timeouts, typed errors, event buffering | ✅ 11 tests against a real agent | `sdk/typescript/` |
+| API: `print.pdf`, `print.image`, `print.html`, REST `/v1/print/{pdf,image,html}` | ✅ | `agent/src/api/` |
+| Decision record | ✅ | `docs/adr/0004-document-rendering.md` |
+
 ## Later phases
 
 | Phase | Scope | Notes and first steps |
 |---|---|---|
-| 2 | PDF (PDFium), images (WIC/`image`), HTML (sandboxed headless Chromium), full capabilities and DEVMODE options, spooler change notifications, **TypeScript SDK** | SDK surface is fixed by `docs/protocol.md`: `connect/disconnect`, `getPrinters`, `getDefaultPrinter`, `getPrinterCapabilities`, `print*`, `getJobs/getJob/cancelJob`, `onPrinterStatus/onJobStatus`, with reconnection, timeouts, request ids, error mapping, version negotiation and event/response reconciliation |
+| 2 | ✅ Done (see above) | |
 | 3 | Label/receipt/dot-matrix **builders** (ZPL/EPL/TSPL/ESC/POS/ESC/P command builders, CPI/LPI/condensed/bold/form length), direct **TCP 9100** provider, opt-in device-status queries (`~HS`, `DLE EOT`) | Builders produce new documents; they never rewrite client bytes |
 | 4 | TLS (`wss://localhost`), pairing with Allow once / Always / Deny, signed challenges, trusted clients in SQLite, revocation | Same `ClientAuthenticator` interface |
 | 5 | Dashboard (served by the agent, admin session), connected clients, queues, history with filters (application, printer, status, date), cancel | APIs already exist: `clients.list`, `queue.*`, `jobs.list` filters, `GET /v1/audit` |

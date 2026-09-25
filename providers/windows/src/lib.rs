@@ -8,6 +8,10 @@
 //! | Discovery / status    | `EnumPrintersW` (level 2), `GetDefaultPrinterW`               |
 //! | RAW printing          | `OpenPrinterW` → `StartDocPrinterW("RAW")` → `WritePrinter`   |
 //! | Text printing         | GDI: `CreateDCW` → `StartDocW` → `TextOutW`                   |
+//! | PDF printing          | `Windows.Data.Pdf` rasterisation → GDI `StretchDIBits` (banded) |
+//! | Image printing        | decoded raster → GDI `StretchDIBits` (banded)                 |
+//! | Page setup            | `DocumentPropertiesW` DEVMODE: paper, orientation, duplex, colour, tray |
+//! | Completion tracking   | `FindFirstPrinterChangeNotification` job-status history      |
 //! | Job status            | `GetJobW` (level 1)                                           |
 //! | Queue inspection      | `EnumJobsW` (level 1)                                         |
 //! | Cancellation          | `SetJobW(JOB_CONTROL_DELETE)`                                 |
@@ -26,6 +30,8 @@ pub mod status;
 #[cfg(windows)]
 mod capabilities;
 #[cfg(windows)]
+mod devmode;
+#[cfg(windows)]
 mod discovery;
 #[cfg(windows)]
 mod ffi;
@@ -34,9 +40,15 @@ mod gdi;
 #[cfg(windows)]
 mod jobs;
 #[cfg(windows)]
+mod pdf;
+#[cfg(windows)]
 mod provider;
 #[cfg(windows)]
+mod raster;
+#[cfg(windows)]
 mod raw;
+#[cfg(windows)]
+mod watch;
 
 #[cfg(windows)]
 pub use provider::WindowsPrintProvider;

@@ -46,7 +46,7 @@ Transitions are enforced in `JobStatus::can_transition_to`. Terminal states are 
 | `completion` | Set when | Confidence |
 |---|---|---|
 | `SPOOLER_REPORTED_PRINTED` | The Windows spooler set `JOB_STATUS_PRINTED` or `JOB_STATUS_COMPLETE` | The spooler sent every byte to the port. Physical output is likely but not confirmed. |
-| `SPOOLER_JOB_RETIRED` | The job left the queue without an error or deletion being seen | Weaker. Windows deletes finished jobs within moments, often between two polls. A user deleting the job in the Windows queue UI between polls also looks like this (Phase 2 change notifications will tell them apart). |
+| `SPOOLER_JOB_RETIRED` | The job left the queue and no printed/deleted status was ever observed | Weakest. On Windows, a change-notification watcher records every status bit a job shows while the agent tracks it. A job that prints and vanishes between polls is therefore still reported as `SPOOLER_REPORTED_PRINTED`, and one deleted in the Windows queue UI as `CANCELLED`. `SPOOLER_JOB_RETIRED` remains only when notifications are unavailable, for example on some print-server connections. |
 | `BYTES_DELIVERED` | A direct transport (TCP 9100, serial; Phase 3/6) wrote all bytes and flushed | The device's buffer has the data. Nothing more. |
 
 **Physical completion is generally unknowable through the OS:**

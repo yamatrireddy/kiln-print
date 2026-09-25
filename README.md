@@ -2,7 +2,7 @@
 
 A local print platform: web, desktop and backend applications talk to a small, authenticated **Print Agent** on the user's machine. The agent prints to any locally reachable printer: office laser/inkjet, thermal label and barcode, receipt/POS, dot-matrix, network and virtual. It covers RAW printing byte for byte, driver-rendered documents, job tracking and silent printing for trusted clients.
 
-> **Status: Phase 1 (foundation).** Windows spooler discovery, RAW and text printing, job engine, authenticated WebSocket/REST API, SQLite persistence. PDF/HTML/image, the TypeScript SDK, TLS/pairing, the dashboard and other operating systems follow in later phases (see [docs/mvp-scope.md](docs/mvp-scope.md)).
+> **Status: Phase 2.** Windows discovery and job tracking; printing of RAW, text, PDF, images and HTML; authenticated WebSocket/REST API; SQLite persistence; TypeScript SDK. Dedicated label/receipt language support and direct TCP (Phase 3), TLS and interactive pairing (Phase 4), the dashboard (Phase 5), and Linux/macOS and installers (Phase 6) come next. See [docs/mvp-scope.md](docs/mvp-scope.md).
 
 ## Quick start (Windows)
 
@@ -55,14 +55,14 @@ cargo run -p kiln-agent -- new-client --id lab-app --name "Lab Application" --or
 ```text
 print-core/            kiln-core: model, errors, interfaces, engine, queues, monitor, discovery
 protocols/             kiln-protocols: ZPL, EPL, CPCL, TSPL, ESC/POS, ESC/P, RAW (read-only inspection)
-renderers/             kiln-renderers: RAW passthrough, text (RAW-encoded / native layout)
+renderers/             kiln-renderers: RAW, text, PDF, image, HTML (sandboxed headless browser)
 providers/windows/     kiln-provider-windows: Winspool + GDI (the only crate with unsafe code)
 providers/mock/        kiln-provider-mock: scriptable provider for CI and --mock
 providers/linux|macos/ Phase 6 notes
 agent/                 kiln-agent: config, security, SQLite, WebSocket/REST API, CLI
-sdk/typescript/        TypeScript SDK (Phase 2)
+sdk/typescript/        @kiln-print/sdk: TypeScript client (browser + Node)
 dashboard/             management UI (Phase 5)
-examples/              runnable Node examples: barcode/ZPL, dot-matrix/ESC-P, text, raw file
+examples/              runnable Node examples: barcode/ZPL, dot-matrix/ESC-P, text, raw, PDF, HTML, image
 tests/hardware/        hardware test procedures and spooler test printer setup
 docs/                  architecture, ADRs, protocol, security, lifecycle, Windows strategy, testing
 ```
@@ -75,6 +75,8 @@ docs/                  architecture, ADRs, protocol, security, lifecycle, Window
 | [ADR 0001: Technology stack](docs/adr/0001-technology-stack.md) | Rust vs C# vs Java, trade-offs |
 | [ADR 0002: User-session agent](docs/adr/0002-user-session-agent.md) | why not a Windows service |
 | [ADR 0003: No automatic retries](docs/adr/0003-no-automatic-print-retries.md) | duplicate-output policy |
+| [ADR 0004: Document rendering](docs/adr/0004-document-rendering.md) | OS PDF engine, sandboxed browser for HTML |
+| [TypeScript SDK](sdk/typescript/README.md) | client API, reconnection, error handling |
 | [Protocol v1](docs/protocol.md) | envelopes, handshake, methods, events, errors, REST |
 | [Security model](docs/security-model.md) | threat model, Phase 1 controls, Phase 4 pairing |
 | [Job lifecycle](docs/print-job-lifecycle.md) | statuses, delivery stages, completion limits, restart |

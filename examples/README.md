@@ -14,7 +14,10 @@ In a second terminal, export the admin token printed by `kiln-agent token` as `K
 | `dot-matrix/print-escp-form.mjs` | ESC/P bytes: 10 CPI, condensed, bold, 6 LPI, form length, form feed |
 | `text/print-text.mjs` | TEXT in RENDERED (driver) or RAW (`KILN_TEXT_MODE=RAW`, IBM437) mode |
 | `raw/print-file.mjs <file> <printer> [language]` | Any file, byte for byte |
+| `pdf/print-pdf.mjs <file.pdf> <printer> [pageRange]` | Silent PDF printing with page setup (uses the SDK) |
+| `html/print-html.mjs` | An HTML invoice with a CSS `@page`, SVG barcode, page break and page-number footer (uses the SDK) |
+| `image/print-image.mjs <image> <printer> [fit]` | Image placement with margins (uses the SDK) |
 
 Select a printer with `KILN_PRINTER="<name or id>"`. The `--mock` flag adds simulated label, receipt, dot-matrix and direct-TCP printers.
 
-PDF, HTML and image examples arrive with Phase 2.
+The SDK-based examples need a one-time SDK build: `cd sdk/typescript && npm install && npm run build`.

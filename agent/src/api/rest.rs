@@ -35,6 +35,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/print", post(print))
         .route("/print/raw", post(print_raw))
         .route("/print/text", post(print_text))
+        .route("/print/pdf", post(print_pdf))
+        .route("/print/html", post(print_html))
+        .route("/print/image", post(print_image))
         .route("/print/{kind}", post(print_unsupported))
         .route("/jobs", get(jobs))
         .route("/jobs/{id}", get(job).delete(cancel_job))
@@ -204,8 +207,34 @@ async fn capabilities(
 }
 
 async fn print(State(s): State<Arc<AppState>>, Authed(p): Authed, bytes: Bytes) -> ApiResult {
+    p.require(crate::security::Permission::Print)?;
+    let job =
+        match body::<GenericPrintParams>(&bytes)?.into_typed(s.config.limits.max_document_bytes)? {
+            TypedPrint::Ready(request) => service::submit(&s, &p, request).await?,
+            TypedPrint::Pending(pending) => service::submit_pending(&s, &p, pending).await?,
+        };
+    ok(StatusCode::ACCEPTED, job)
+}
+
+async fn print_pdf(State(s): State<Arc<AppState>>, Authed(p): Authed, bytes: Bytes) -> ApiResult {
+    let pending = body::<PdfPrintParams>(&bytes)?.into_pending()?;
+    ok(
+        StatusCode::ACCEPTED,
+        service::submit_pending(&s, &p, pending).await?,
+    )
+}
+
+async fn print_image(State(s): State<Arc<AppState>>, Authed(p): Authed, bytes: Bytes) -> ApiResult {
+    let pending = body::<ImagePrintParams>(&bytes)?.into_pending()?;
+    ok(
+        StatusCode::ACCEPTED,
+        service::submit_pending(&s, &p, pending).await?,
+    )
+}
+
+async fn print_html(State(s): State<Arc<AppState>>, Authed(p): Authed, bytes: Bytes) -> ApiResult {
     let request =
-        body::<GenericPrintParams>(&bytes)?.into_request(s.config.limits.max_document_bytes)?;
+        body::<HtmlPrintParams>(&bytes)?.into_request(s.config.limits.max_document_bytes)?;
     ok(
         StatusCode::ACCEPTED,
         service::submit(&s, &p, request).await?,
@@ -233,10 +262,7 @@ async fn print_text(State(s): State<Arc<AppState>>, Authed(p): Authed, bytes: By
 async fn print_unsupported(Authed(_): Authed, Path(kind): Path<String>) -> ApiResult {
     Err(PrintError::new(
         ErrorCode::UnsupportedDocument,
-        format!(
-            "{} printing is not available in this agent version",
-            kind.to_ascii_uppercase()
-        ),
+        format!("unknown document type '{}'", kind.to_ascii_uppercase()),
     )
     .into())
 }

@@ -173,9 +173,9 @@ impl Client {
 
     async fn next_message(&mut self) -> Option<Value> {
         loop {
-            match tokio::time::timeout(Duration::from_secs(5), self.ws.next())
+            match tokio::time::timeout(Duration::from_secs(20), self.ws.next())
                 .await
-                .expect("message within 5s")
+                .expect("message within 20s")
             {
                 Some(Ok(Message::Text(t))) => return Some(serde_json::from_str(&t).expect("json")),
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
@@ -576,10 +576,21 @@ async fn malformed_and_duplicate_requests() {
     let r = c
         .call(
             "print.submit",
-            json!({ "type": "PDF", "printer": "Laser", "data": "" }),
+            json!({ "type": "SPREADSHEET", "printer": "Laser", "data": "" }),
         )
         .await;
     assert_eq!(error_code(&r), "UNSUPPORTED_DOCUMENT");
+    let r = c
+        .call(
+            "print.pdf",
+            json!({ "printer": "Laser", "data": "bm90IGEgcGRm" }),
+        )
+        .await;
+    assert_eq!(
+        error_code(&r),
+        "INVALID_PAYLOAD",
+        "non-PDF data is rejected"
+    );
     // The connection survives all of the above.
     assert_eq!(c.call("session.ping", json!({})).await["ok"], true);
     t.stop().await;
@@ -743,7 +754,7 @@ async fn rest_api() {
     let (status, _) = http(
         t.addr,
         "POST",
-        "/v1/print/pdf",
+        "/v1/print/spreadsheet",
         Some(ADMIN_TOKEN),
         Some(json!({})),
         &[],
@@ -836,4 +847,174 @@ async fn jobs_survive_an_agent_restart() {
     );
     t.stop().await;
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ------------------------------------------------------------------ Phase 2 documents
+
+/// A 2x1 PNG (red, blue).
+fn tiny_png() -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(2, 1, |x, _| {
+        if x == 0 {
+            image::Rgb([255, 0, 0])
+        } else {
+            image::Rgb([0, 0, 255])
+        }
+    }))
+    .write_to(&mut out, image::ImageFormat::Png)
+    .expect("png");
+    out.into_inner()
+}
+
+const TINY_PDF: &[u8] =
+    b"%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+
+fn b64(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+#[tokio::test]
+async fn pdf_and_image_documents_reach_graphics_printers() {
+    let t = start().await;
+    let mut c = Client::connect(t.addr, ADMIN_TOKEN, None).await;
+
+    let pdf = c
+        .call(
+            "print.pdf",
+            json!({
+                "printer": "Laser",
+                "data": b64(TINY_PDF),
+                "options": { "pageRange": "1", "scale": "FIT", "paperSize": "A4", "duplex": "LONG_EDGE", "color": "MONOCHROME" },
+                "copies": 2
+            }),
+        )
+        .await;
+    assert_eq!(pdf["ok"], true, "{pdf}");
+    assert_eq!(pdf["result"]["documentType"], "PDF");
+    c.wait_event(
+        "job.completed",
+        pdf["result"]["jobId"].as_str().expect("id"),
+    )
+    .await;
+
+    let img = c
+        .call(
+            "print.submit",
+            json!({ "type": "IMAGE", "printer": "Laser", "data": b64(&tiny_png()), "options": { "fit": "ORIGINAL", "rotate": 90, "dpi": 300 } }),
+        )
+        .await;
+    assert_eq!(img["ok"], true, "{img}");
+    c.wait_event(
+        "job.completed",
+        img["result"]["jobId"].as_str().expect("id"),
+    )
+    .await;
+
+    let subs = t.mock.submissions();
+    let PrintPayload::Pdf(p) = &subs[0].payload else {
+        panic!("pdf payload")
+    };
+    assert_eq!(
+        &p.bytes[..],
+        TINY_PDF,
+        "PDF bytes are passed through untouched"
+    );
+    assert_eq!(p.setup.duplex, Some(kiln_core::model::Duplex::LongEdge));
+    assert_eq!(p.pages.as_ref().expect("range").indices(3), vec![0]);
+    let PrintPayload::Image(i) = &subs[1].payload else {
+        panic!("image payload")
+    };
+    assert_eq!(
+        (i.image.width, i.image.height),
+        (1, 2),
+        "rotated 90 degrees"
+    );
+    assert_eq!(i.image.dpi_x, 300);
+
+    // Label printers without a graphics driver refuse graphical documents up front.
+    let r = c
+        .call(
+            "print.pdf",
+            json!({ "printer": "Zebra", "data": b64(TINY_PDF) }),
+        )
+        .await;
+    assert_eq!(error_code(&r), "UNSUPPORTED_DOCUMENT");
+    let caps = c
+        .call("printers.capabilities", json!({ "printer": "Laser" }))
+        .await;
+    let types: Vec<_> = caps["result"]["documentTypes"]
+        .as_array()
+        .expect("types")
+        .to_vec();
+    for t in ["RAW", "TEXT", "PDF", "IMAGE"] {
+        assert!(types.contains(&json!(t)), "{t} in {types:?}");
+    }
+    t.stop().await;
+}
+
+#[tokio::test]
+async fn html_is_rendered_to_pdf_before_printing() {
+    // See renderers/tests/html.rs: Linux CI runners often cannot start Chrome's sandbox.
+    let linux_opt_out = cfg!(target_os = "linux") && std::env::var_os("KILN_HTML_TESTS").is_none();
+    if linux_opt_out || kiln_renderers::html::find_browser().is_none() {
+        eprintln!("skipping: browser tests disabled or no Edge/Chrome/Chromium installed");
+        return;
+    }
+    let t = start().await;
+    let mut c = Client::connect(t.addr, ADMIN_TOKEN, None).await;
+    let r = c
+        .call(
+            "print.html",
+            json!({
+                "printer": "Laser",
+                "html": "<h1>Invoice</h1><p style='break-before:page'>Terms</p>",
+                "options": { "paperSize": "Letter", "footerHtml": "<span class=pageNumber></span>" }
+            }),
+        )
+        .await;
+    assert_eq!(r["ok"], true, "{r}");
+    let job_id = r["result"]["jobId"].as_str().expect("id").to_owned();
+    let done = c.wait_event("job.completed", &job_id).await;
+    assert_eq!(done["data"]["documentType"], "HTML");
+    let PrintPayload::Pdf(p) = &t.mock.submissions()[0].payload else {
+        panic!("pdf payload")
+    };
+    assert!(p.bytes.starts_with(b"%PDF"));
+    assert_eq!(p.placement, kiln_core::model::Placement::ActualSize);
+    t.stop().await;
+}
+
+#[tokio::test]
+async fn path_sources_obey_the_allowlist() {
+    let dir = temp_dir();
+    let docs = dir.join("docs");
+    std::fs::create_dir_all(&docs).expect("mkdir");
+    std::fs::write(docs.join("label.png"), tiny_png()).expect("write");
+    std::fs::write(dir.join("private.pdf"), TINY_PDF).expect("write");
+
+    // Disabled by default.
+    let t = start_with(base_config(&dir), default_mock()).await;
+    let mut c = Client::connect(t.addr, ADMIN_TOKEN, None).await;
+    let path = docs.join("label.png").display().to_string();
+    let r = c
+        .call("print.image", json!({ "printer": "Laser", "path": path }))
+        .await;
+    assert_eq!(error_code(&r), "ACCESS_DENIED");
+    t.stop_keep_data().await;
+
+    let mut config = base_config(&dir);
+    config.sources.allowed_paths = vec![docs.clone()];
+    let t = start_with(config, default_mock()).await;
+    let mut c = Client::connect(t.addr, ADMIN_TOKEN, None).await;
+    let r = c
+        .call("print.image", json!({ "printer": "Laser", "path": path }))
+        .await;
+    assert_eq!(r["ok"], true, "{r}");
+    let outside = dir.join("private.pdf").display().to_string();
+    let r = c
+        .call("print.pdf", json!({ "printer": "Laser", "path": outside }))
+        .await;
+    assert_eq!(error_code(&r), "ACCESS_DENIED");
+    t.stop().await;
 }

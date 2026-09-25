@@ -13,6 +13,8 @@ The agent turns HTTP requests into physical output on hardware the user owns, an
 | Other devices on the network | TCP to the machine | Loopback bind by default. Non-loopback peers are rejected. Binding elsewhere needs `allow_non_loopback = true` (and TLS in Phase 4). |
 | Other local processes as the same user | Same privileges as the user | Out of scope for isolation: they can already read the user's files, including the admin token. Controls here are auditability and least-privilege tokens for applications. |
 | Other local users (multi-user machine) | Can connect to loopback ports | Token required. The token file lives in the per-user profile (ACL-protected). Per-session ports in Phase 6. |
+| Hostile document content | HTML with scripts, remote resources or `file:` references; images built as decompression bombs; malformed PDFs | HTML renders in a throw-away headless browser with JavaScript off, every network request failed (dead proxy plus `Fetch` interception, loopback included), injected into `about:blank` (no `file:` access), killed on timeout. Images: pixel and allocation caps before decoding. PDFs are parsed by the OS engine in the agent's user context. See [ADR 0004](adr/0004-document-rendering.md). |
+| A client using the agent to read files or reach internal URLs | `path`/`url` document sources | Disabled unless an administrator lists allowed folders / URL prefixes (prefixes must end with `/`). Paths are canonicalised before the check. The same error is returned for "missing" and "outside" (no existence oracle). No redirects. Size caps. The `print` permission is checked before any read or fetch. |
 | Malformed or hostile payloads | Oversized or garbled input | Size caps before decoding. Frame and body caps. Strict JSON schemas. Bounded queues. Memory-safe parsing (`unsafe` is forbidden outside the Windows FFI crate). |
 | Log and database readers | Read agent storage | Payloads and tokens are never logged or stored. Only token hashes are kept in configuration. Job names are not logged. |
 
@@ -82,3 +84,6 @@ sequenceDiagram
 | No remote access by default | ✅ loopback bind; config validation refuses otherwise |
 | No stack traces to clients | ✅ `INTERNAL_ERROR` is generic; detail goes to the log |
 | No payloads in logs | ✅ verified in the Phase 1 test run (log grep) |
+| HTML cannot reach the network or loopback | ✅ `renderers/tests/html.rs` asserts zero connections to a local listener; a control run without the sandbox flags does connect |
+| HTML JavaScript disabled by default | ✅ `html.javascript = false` |
+| File/URL sources disabled by default | ✅ `sources.allowed_paths` and `sources.allowed_url_prefixes` are empty; tested for traversal, prefix spoofing, redirects and missing-vs-outside parity |

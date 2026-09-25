@@ -15,7 +15,12 @@ Everything Windows-specific lives in `providers/windows` (`kiln-provider-windows
 | Capabilities | `DeviceCapabilitiesW` (papers, sizes, bins, resolutions, color, duplex, copies, collate, orientation) | `capabilities.rs` |
 | RAW printing | `OpenPrinterW` → `StartDocPrinterW(level 1, "RAW")` → per copy `StartPagePrinter`/`WritePrinter` (64 KiB chunks)/`EndPagePrinter` → `EndDocPrinter`; `AbortPrinter` on any failure | `raw.rs` |
 | Text printing | GDI: `DocumentPropertiesW` (orientation) → `CreateDCW("WINSPOOL")` → `StartDocW` → `TextOutW` → `EndDoc`; `AbortDoc` on failure | `gdi.rs` + `layout.rs` |
+| PDF printing | `Windows.Data.Pdf` (`PdfDocument`, `RenderWithOptionsToStreamAsync`) → raster → GDI | `pdf.rs`, `raster.rs` |
+| Image printing | decoded RGB → GDI `StretchDIBits` in ≤ 8 MB bands, `HALFTONE`, clip to area | `raster.rs` |
+| Page setup | `DocumentPropertiesW` merge of paper (`dmPaperSize`/custom), orientation, duplex, colour, tray, validated against `DeviceCapabilitiesW` | `devmode.rs` |
+| Default paper | `CreateICW` + `PHYSICALWIDTH/HEIGHT` | `capabilities.rs` |
 | Job status | `GetJobW(level 1)`; `ERROR_INVALID_PARAMETER` = the job is no longer in the queue | `jobs.rs` |
+| Completion tracking | `FindFirstPrinterChangeNotification(PRINTER_CHANGE_JOB, JOB_NOTIFY_FIELD_STATUS)`, with per-printer watcher threads that exit after 2 minutes idle | `watch.rs`, `status::resolve_job_state` |
 | Queue inspection | `EnumJobsW(level 1)` | `jobs.rs` |
 | Cancellation | `SetJobW(JOB_CONTROL_DELETE)` | `jobs.rs` |
 
@@ -54,15 +59,24 @@ The engine therefore treats `online` as best-effort. It never refuses to queue a
 
 See [ADR 0002](adr/0002-user-session-agent.md). GDI printing from session 0 is unsupported, and per-user printer connections are invisible to service accounts. The agent runs per user at logon.
 
+## PDF, images and HTML (Phase 2)
+
+- **PDF:** see [ADR 0004](adr/0004-document-rendering.md).
+  - Each selected page is rendered by `Windows.Data.Pdf` directly at its destination size in device pixels, capped at `dpi` (default 300), then drawn with `StretchDIBits`.
+  - Orientation follows the first selected page unless set.
+  - `FIT`/`SHRINK_TO_FIT` lay out inside the printable area. `ACTUAL_SIZE`/percent lay out on the physical page (true position), and explicit margins lay out inside the paper minus those margins.
+  - Copies re-render pages (collated), independent of driver copy support.
+- **Images:** decoded and rotated by the renderer, and placed by `kiln_core::model::place` with the device's real DPI and printable area.
+- **HTML:** rendered to PDF by a sandboxed headless Edge/Chrome. Edge ships with Windows 10 and 11.
+- **Why raster:** it works identically with v3, v4 and XPS drivers and with thermal label printers, where vector output is often poor. At 300 dpi text is indistinguishable on office printers.
+- **Page setup** is validated against the driver. Unknown paper or trays fail with `INVALID_PAYLOAD` (listing what is available), and duplex or colour on printers without them fail with `UNSUPPORTED_OPERATION`. Nothing is spooled when this fails.
+
 ## Roadmap for the Windows provider
 
 | Phase | Work |
 |---|---|
-| 2 | `FindFirstPrinterChangeNotification` / `FindNextPrinterChangeNotification` to replace polling for job and printer changes. This gives precise deletion-vs-printed detection and lower latency. |
-| 2 | PDF: PDFium rasterisation → GDI `StretchDIBits` per page at device DPI, honouring page range, scale, orientation, duplex and colour via DEVMODE. Evaluate the XPS Print API (`IXpsPrintJob`) for v4 drivers. |
-| 2 | Images: WIC decode (PNG, JPEG, BMP, TIFF) → GDI with fit/fill/center/scale/rotate/DPI |
-| 2 | HTML: sandboxed headless Chromium/WebView2 → PDF → PDF path. JavaScript and network off by default; allow-listed fonts. |
-| 2 | Full DEVMODE options: paper size (`dmPaperSize`), tray (`dmDefaultSource`), duplex, colour, copies/collate for GDI jobs |
+| 3 | Direct TCP 9100 provider (separate from the spooler; explicitly configured printers only) |
+| 3 | Optional XPS print path (`IXpsPrintJob`) for vector PDF output on v4 drivers |
 | 3 | Direct TCP 9100 provider (separate from the spooler; explicitly configured printers only) |
 | 6 | Serial provider (`serialport` crate) for COM-attached legacy printers; per-session port selection; MSI (WiX) installer with code signing; tray icon; autostart registration |
 
@@ -71,4 +85,5 @@ See [ADR 0002](adr/0002-user-session-agent.md). GDI printing from session 0 is u
 - Discovery: "Microsoft Print to PDF" (port `PORTPROMPT:`, v4) and "OneNote (Desktop)" (port `nul:`, v4) were both detected as `VIRTUAL` with `raw = false`, and `RAW, NT EMF 1.00x, TEXT, XPS2GDI` datatypes were listed.
 - RAW to OneNote was correctly refused with `UNSUPPORTED_OPERATION`.
 - A GDI text job to Microsoft Print to PDF produced a valid 4-page PDF through the spooler.
+- Phase 2: a two-page PDF printed 2 copies (4 pages), a page range with A5 landscape page setup (MediaBox 595 × 420 pt verified), a 3 × 1.5 in image at actual size (auto-landscape), an unknown paper and a corrupt PDF rejected before spooling, and a job verified to have left the queue still reported `Printed` through change-notification history.
 - Byte-exact RAW through the spooler needs a v3 printer. Run `tests/hardware/setup-windows-test-printer.ps1` (administrator) to create "Kiln Test Raw" (Generic / Text Only → local file port), then the ignored test `raw_job_reaches_the_port_byte_for_byte`.

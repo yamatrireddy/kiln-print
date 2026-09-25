@@ -51,6 +51,18 @@ interval_secs = 5
 windows = true                    # OS spooler (Windows only)
 mock = false                      # simulated printers for development
 
+[html]
+# browser_path = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'   # default: auto-detect Edge/Chrome/Chromium
+javascript = false                # JavaScript in printed HTML (network access is always blocked)
+timeout_secs = 30
+
+[sources]
+# PDF/image documents may be sent inline (data) or, if allowed here, by path or URL.
+# Both lists are empty by default, which disables path and URL sources entirely.
+allowed_paths = []                # e.g. ['D:\Labels']
+allowed_url_prefixes = []         # e.g. ["https://files.example.com/labels/"] (must end with /)
+fetch_timeout_secs = 30
+
 [storage]
 # data_dir = "D:\\KilnData"      # default: %LOCALAPPDATA%\KilnPrint
 audit_retention_days = 90

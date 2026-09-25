@@ -12,7 +12,10 @@ use kiln_core::provider::{
 };
 
 use crate::discovery::{self, MetaCache, PrinterMeta};
-use crate::{capabilities, gdi, jobs, raw};
+use crate::pdf::PdfSource;
+use crate::raster::{self, ImageSource};
+use crate::watch::JobWatchers;
+use crate::{capabilities, gdi, jobs, raw, status};
 
 pub(crate) const PROVIDER_ID: &str = "windows";
 
@@ -21,12 +24,14 @@ pub(crate) const PROVIDER_ID: &str = "windows";
 #[derive(Debug, Default)]
 pub struct WindowsPrintProvider {
     meta: MetaCache,
+    watchers: JobWatchers,
 }
 
 impl WindowsPrintProvider {
     pub fn new() -> Self {
         Self {
             meta: Mutex::new(HashMap::new()),
+            watchers: JobWatchers::default(),
         }
     }
 
@@ -60,6 +65,19 @@ impl WindowsPrintProvider {
         spec: &SubmitSpec,
         output: Option<&Path>,
     ) -> Result<SubmitOutcome> {
+        // Subscribe to spooler notifications before the job exists, so its whole life
+        // (including a print-and-vanish between polls) is observed.
+        self.watchers.ensure(&printer.name);
+        let raster_job = |setup, placement, align| raster::Job {
+            printer_name: &printer.name,
+            port: printer.port.as_deref(),
+            document_name: &spec.document_name,
+            copies: spec.copies,
+            setup,
+            placement,
+            align,
+            output_file: output,
+        };
         let job_id = match &spec.payload {
             PrintPayload::Raw(payload) => raw::submit(
                 &printer.name,
@@ -75,6 +93,15 @@ impl WindowsPrintProvider {
                 layout,
                 output,
             )?,
+            PrintPayload::Pdf(pdf) => {
+                let mut source = PdfSource::open(&pdf.bytes, pdf.pages.as_ref(), pdf.max_dpi)?;
+                let job = raster_job(&pdf.setup, pdf.placement, kiln_core::model::Align::Center);
+                raster::print(&job, &mut source)?
+            }
+            PrintPayload::Image(image) => {
+                let job = raster_job(&image.setup, image.placement, image.align);
+                raster::print(&job, &mut ImageSource(&image.image))?
+            }
         };
         Ok(SubmitOutcome::Spooled {
             spooler_job_id: u64::from(job_id),
@@ -109,7 +136,8 @@ impl PrintProvider for WindowsPrintProvider {
                 .meta(printer)
                 .and_then(|m| m.raw_supported())
                 .unwrap_or(true),
-            PayloadKind::Text => true,
+            // GDI output (text, rasterised PDF pages, images) works with every driver model.
+            PayloadKind::Text | PayloadKind::Pdf | PayloadKind::Image => true,
         }
     }
 
@@ -118,7 +146,21 @@ impl PrintProvider for WindowsPrintProvider {
     }
 
     fn job_state(&self, printer: &Printer, spooler_job_id: u64) -> Result<ProviderJobState> {
-        jobs::state(&printer.name, to_u32(spooler_job_id)?)
+        let id = to_u32(spooler_job_id)?;
+        let current = jobs::current(&printer.name, id)?;
+        let observed = self.watchers.observed(&printer.name, id);
+        let state = status::resolve_job_state(current, observed);
+        if matches!(
+            state,
+            ProviderJobState::Printed | ProviderJobState::Cancelled | ProviderJobState::Gone
+        ) {
+            self.watchers.forget(&printer.name, id);
+        }
+        Ok(state)
+    }
+
+    fn default_paper_mm(&self, printer: &Printer) -> Option<(f32, f32)> {
+        capabilities::default_paper_mm(&printer.name)
     }
 
     fn cancel(&self, printer: &Printer, spooler_job_id: u64) -> Result<()> {

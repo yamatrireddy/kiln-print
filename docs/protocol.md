@@ -67,9 +67,12 @@ The agent pings every `heartbeatSeconds` and closes connections that are silent 
 | `printers.default` | `printers.read` | — | `Printer \| null` |
 | `printers.get` | `printers.read` | `printerId` or `printer` (name) | `Printer` with `capabilities` |
 | `printers.capabilities` | `printers.read` | `printerId` or `printer` | `PrinterCapabilities` |
-| `print.submit` | `print` | `type` (`RAW`, `TEXT`; `PDF`/`HTML`/`IMAGE` in Phase 2) plus that type's fields | `Job` |
+| `print.submit` | `print` | `type` (`RAW`, `TEXT`, `PDF`, `IMAGE`, `HTML`) plus that type's fields | `Job` |
 | `print.raw` | `print` | see below | `Job` |
 | `print.text` | `print` | see below | `Job` |
+| `print.pdf` | `print` | see below | `Job` |
+| `print.image` | `print` | see below | `Job` |
+| `print.html` | `print` | see below | `Job` |
 | `jobs.list` | `jobs.read` | `status` (string, comma list or array), `printerId`, `clientId`\*, `since`, `until`, `limit` (≤ 500), `offset` | `Job[]`, newest first |
 | `jobs.get` | `jobs.read` | `jobId` | `Job` |
 | `jobs.cancel` | `jobs.cancel` (own), `jobs.cancel.all` | `jobId` | `Job` |
@@ -120,6 +123,86 @@ Bytes reach the device exactly as decoded. `language` only selects inspection. W
 
 RAW text encoding is strict. A character the target encoding cannot represent is an `INVALID_PAYLOAD` error, never a silent `?`.
 
+### Page setup (PDF, image, HTML)
+
+These fields go inside `options`. Each is optional, and an unset field means "the printer's default". Values the printer does not support are rejected, never silently replaced.
+
+| Field | Values |
+|---|---|
+| `paperSize` | a name (`"A4"`, `"Letter"`), a driver paper id from `capabilities.paperSizes`, or `{ "widthMm": 100, "heightMm": 150 }` |
+| `orientation` | `PORTRAIT` \| `LANDSCAPE`. Unset follows the content: landscape pages print landscape. |
+| `marginsMm` | `{ top, right, bottom, left }`. Unset uses the printer's minimum margins. |
+| `duplex` | `SIMPLEX` \| `LONG_EDGE` \| `SHORT_EDGE` |
+| `color` | `COLOR` \| `MONOCHROME` |
+| `tray` | a tray id or name from `capabilities.trays` |
+
+### Document sources (PDF, image)
+
+Give exactly one of:
+
+- `data` plus `encoding` (default `base64`);
+- `path`: an absolute local file path, honoured only under `sources.allowed_paths`;
+- `url`: honoured only under `sources.allowed_url_prefixes`, with no redirects and within the size limit.
+
+Both allow-lists are empty by default, so path and URL sources are refused with `ACCESS_DENIED`. The same error is returned whether a file is missing or outside the allowed folders, so the answer never reveals whether a file exists.
+
+### `print.pdf`
+
+```jsonc
+{
+  "printer": "HP LaserJet",
+  "data": "JVBERi0xLjcK…",                // or "path" / "url"
+  "copies": 2,
+  "options": {
+    "pageRange": "1-3,5,8-",              // printed in the order given
+    "scale": "SHRINK_TO_FIT",             // FIT | SHRINK_TO_FIT (default) | ACTUAL_SIZE | percentage
+    "dpi": 300,                           // rasterisation cap on Windows (72-1200)
+    "paperSize": "A4", "duplex": "LONG_EDGE", "color": "MONOCHROME"
+  }
+}
+```
+
+No viewer is opened. On Windows, pages are rendered by the OS PDF engine at their printed size and sent through the driver. See [ADR 0004](adr/0004-document-rendering.md).
+
+### `print.image`
+
+```jsonc
+{
+  "printer": "Label Printer (driver)",
+  "data": "iVBORw0KGgo…",                 // PNG, JPEG, BMP, TIFF (first page), GIF (first frame)
+  "options": {
+    "fit": "FIT",                         // ORIGINAL | FIT (default) | SHRINK_TO_FIT | FILL
+    "scale": 50,                          // % of original size; overrides fit
+    "rotate": 90,                         // 0 | 90 | 180 | 270, clockwise
+    "dpi": 203,                           // image resolution for ORIGINAL/scale (default: file metadata, else 96)
+    "align": "CENTER",                    // CENTER | TOP_LEFT
+    "paperSize": { "widthMm": 100, "heightMm": 150 }
+  }
+}
+```
+
+Transparency prints as white paper. Images larger than 80 megapixels are refused with `PAYLOAD_TOO_LARGE` before decoding.
+
+### `print.html`
+
+```jsonc
+{
+  "printer": "Front Desk",
+  "html": "<!doctype html><style>@page { size: A5; margin: 12mm }</style><h1>Receipt</h1>…",
+  "options": {
+    "paperSize": "Letter",                // used unless the CSS @page size wins (preferCssPageSize, default true)
+    "marginsMm": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+    "scale": 100,                         // layout zoom, 10-200 %
+    "printBackground": true,
+    "pageRange": "1-2",
+    "headerHtml": "<div style='font-size:8px'><span class='title'></span></div>",
+    "footerHtml": "<div style='font-size:8px'>Page <span class='pageNumber'></span>/<span class='totalPages'></span></div>"
+  }
+}
+```
+
+HTML is rendered by a sandboxed headless Edge, Chrome or Chromium. **JavaScript is disabled, and no network request of any kind leaves the renderer**, including to localhost. Supply barcodes and QR codes as inline SVG or `data:` images, and fonts as `data:` URIs or system fonts. Without paper settings, the printer's default paper is used. If no browser is installed, HTML is reported as unsupported.
+
 ## Events
 
 | Event | Payload | When |
@@ -166,8 +249,7 @@ All REST routes require `Authorization: Bearer <token>`, and responses use the s
 |---|---|
 | `GET /v1/health` (no auth) | liveness: `{ status, protocolVersions }` |
 | `GET /v1/printers` · `/v1/printers/default` · `/v1/printers/{id}` · `/v1/printers/{id}/capabilities` | `printers.*` |
-| `POST /v1/print` · `/v1/print/raw` · `/v1/print/text` → **202** | `print.*` |
-| `POST /v1/print/pdf` · `/html` · `/image` | 422 until Phase 2 |
+| `POST /v1/print` · `/v1/print/raw` · `/text` · `/pdf` · `/image` · `/html` → **202** | `print.*` |
 | `GET /v1/jobs?status=&printerId=&clientId=&since=&until=&limit=&offset=` | `jobs.list` |
 | `GET /v1/jobs/{id}` · `DELETE /v1/jobs/{id}` | `jobs.get` · `jobs.cancel` |
 | `GET /v1/queue` · `/v1/queue/{printerId}` | `queue.list` · `queue.get` |

@@ -8,6 +8,7 @@ pub mod config;
 pub mod logging;
 pub mod persistence;
 pub mod security;
+pub mod sources;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -56,6 +57,14 @@ pub fn build_engine(
     for renderer in kiln_renderers::builtin() {
         builder = builder.renderer(renderer);
     }
+    builder = builder.renderer(Arc::new(kiln_renderers::html::HtmlRenderer::new(
+        kiln_renderers::html::HtmlConfig {
+            browser: config.html.browser_path.clone(),
+            timeout: std::time::Duration::from_secs(config.html.timeout_secs.max(1)),
+            javascript: config.html.javascript,
+            max_pdf_bytes: usize::try_from(config.limits.max_document_bytes).unwrap_or(usize::MAX),
+        },
+    )));
     for protocol in kiln_protocols::builtin() {
         builder = builder.protocol(protocol);
     }

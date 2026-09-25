@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, NaiveDate, Utc};
 use kiln_core::error::{ErrorCode, PrintError};
-use kiln_core::provider::{ProviderJobState, QueueEntry};
+use kiln_core::provider::QueueEntry;
 use windows::Win32::Foundation::SYSTEMTIME;
 use windows::Win32::Graphics::Printing::{
     EnumJobsW, GetJobW, JOB_CONTROL_DELETE, JOB_INFO_1W, SetJobW,
@@ -11,7 +11,12 @@ use windows::Win32::Graphics::Printing::{
 use crate::ffi::{PrinterHandle, PrinterNameExt, map_error, query, read_pwstr, win32, win32_code};
 use crate::status;
 
-pub(crate) fn state(printer_name: &str, job_id: u32) -> Result<ProviderJobState, PrintError> {
+/// Current `JOB_INFO_1W` status bits and text, or `None` if the spooler no longer has
+/// the job (finished and removed, or deleted).
+pub(crate) fn current(
+    printer_name: &str,
+    job_id: u32,
+) -> Result<Option<(u32, Option<String>)>, PrintError> {
     let handle = PrinterHandle::open(printer_name)?;
     let result = query(|buf, needed| {
         // SAFETY: arguments are valid for the duration of the call.
@@ -19,23 +24,19 @@ pub(crate) fn state(printer_name: &str, job_id: u32) -> Result<ProviderJobState,
     });
     let buffer = match result {
         Ok(buffer) => buffer,
-        // The spooler no longer knows the job: it finished and was removed, or was deleted.
-        Err(e) if win32_code(&e) == Some(win32::ERROR_INVALID_PARAMETER) => {
-            return Ok(ProviderJobState::Gone);
-        }
+        Err(e) if win32_code(&e) == Some(win32::ERROR_INVALID_PARAMETER) => return Ok(None),
         Err(e) => {
             return Err(map_error("could not query job status", &e).with_printer_name(printer_name));
         }
     };
     if buffer.len() < std::mem::size_of::<JOB_INFO_1W>() {
-        return Ok(ProviderJobState::Gone);
+        return Ok(None);
     }
     // SAFETY: the buffer holds one JOB_INFO_1W whose strings point into the buffer.
-    let (flags, text) = unsafe {
+    Ok(Some(unsafe {
         let info = &*buffer.as_ptr::<JOB_INFO_1W>();
         (info.Status, read_pwstr(info.pStatus))
-    };
-    Ok(status::job_state(flags, text))
+    }))
 }
 
 pub(crate) fn queue(printer_name: &str) -> Result<Vec<QueueEntry>, PrintError> {

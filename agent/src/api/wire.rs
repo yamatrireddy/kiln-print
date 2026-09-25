@@ -220,6 +220,162 @@ pub struct TextPrintParams {
     pub idempotency_key: Option<String>,
 }
 
+/// Where a binary document (PDF, image) comes from: exactly one of inline `data`, a local
+/// `path` or a `url`. Paths and URLs are only honoured inside administrator allow-lists.
+#[derive(Debug, Clone)]
+pub enum SourceSpec {
+    Inline {
+        data: String,
+        encoding: DataEncoding,
+    },
+    Path(String),
+    Url(String),
+}
+
+fn source_spec(
+    data: Option<String>,
+    encoding: DataEncoding,
+    path: Option<String>,
+    url: Option<String>,
+) -> Result<SourceSpec, PrintError> {
+    match (data, path, url) {
+        (Some(data), None, None) => Ok(SourceSpec::Inline { data, encoding }),
+        (None, Some(path), None) => Ok(SourceSpec::Path(path)),
+        (None, None, Some(url)) => Ok(SourceSpec::Url(url)),
+        _ => Err(PrintError::invalid_payload(
+            "give exactly one of data, path or url",
+        )),
+    }
+}
+
+/// `print.pdf` / `POST /v1/print/pdf`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PdfPrintParams {
+    pub printer_id: Option<String>,
+    pub printer: Option<String>,
+    pub data: Option<String>,
+    #[serde(default)]
+    pub encoding: DataEncoding,
+    pub path: Option<String>,
+    pub url: Option<String>,
+    #[serde(default)]
+    pub options: PdfOptions,
+    pub copies: Option<u32>,
+    pub job_name: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+/// `print.image` / `POST /v1/print/image`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImagePrintParams {
+    pub printer_id: Option<String>,
+    pub printer: Option<String>,
+    pub data: Option<String>,
+    #[serde(default)]
+    pub encoding: DataEncoding,
+    pub path: Option<String>,
+    pub url: Option<String>,
+    #[serde(default)]
+    pub options: ImageOptions,
+    pub copies: Option<u32>,
+    pub job_name: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+/// `print.html` / `POST /v1/print/html`. HTML is always inline: the agent never
+/// navigates to remote pages.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HtmlPrintParams {
+    pub printer_id: Option<String>,
+    pub printer: Option<String>,
+    pub html: String,
+    #[serde(default)]
+    pub options: HtmlOptions,
+    pub copies: Option<u32>,
+    pub job_name: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+/// A request whose document bytes still have to be resolved from a [`SourceSpec`].
+pub struct PendingRequest {
+    pub source: SourceSpec,
+    build: Box<dyn FnOnce(Bytes) -> Document + Send>,
+    printer: PrinterSelector,
+    copies: u32,
+    job_name: Option<String>,
+    idempotency_key: Option<String>,
+}
+
+impl std::fmt::Debug for PendingRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingRequest")
+            .field("source", &self.source)
+            .field("printer", &self.printer)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingRequest {
+    pub fn complete(self, data: Bytes) -> PrintRequest {
+        PrintRequest {
+            printer: self.printer,
+            document: (self.build)(data),
+            copies: self.copies,
+            job_name: self.job_name,
+            idempotency_key: self.idempotency_key,
+        }
+    }
+}
+
+impl PdfPrintParams {
+    pub fn into_pending(self) -> Result<PendingRequest, PrintError> {
+        let options = self.options;
+        Ok(PendingRequest {
+            source: source_spec(self.data, self.encoding, self.path, self.url)?,
+            build: Box::new(move |data| Document::Pdf(PdfDocument { data, options })),
+            printer: selector(self.printer_id, self.printer)?,
+            copies: self.copies.unwrap_or(1),
+            job_name: self.job_name,
+            idempotency_key: self.idempotency_key,
+        })
+    }
+}
+
+impl ImagePrintParams {
+    pub fn into_pending(self) -> Result<PendingRequest, PrintError> {
+        let options = self.options;
+        Ok(PendingRequest {
+            source: source_spec(self.data, self.encoding, self.path, self.url)?,
+            build: Box::new(move |data| Document::Image(ImageDocument { data, options })),
+            printer: selector(self.printer_id, self.printer)?,
+            copies: self.copies.unwrap_or(1),
+            job_name: self.job_name,
+            idempotency_key: self.idempotency_key,
+        })
+    }
+}
+
+impl HtmlPrintParams {
+    pub fn into_request(self, max_bytes: u64) -> Result<PrintRequest, PrintError> {
+        if self.html.len() as u64 > max_bytes {
+            return Err(too_large(self.html.len() as u64, max_bytes));
+        }
+        Ok(PrintRequest {
+            printer: selector(self.printer_id, self.printer)?,
+            document: Document::Html(HtmlDocument {
+                html: self.html,
+                options: self.options,
+            }),
+            copies: self.copies.unwrap_or(1),
+            job_name: self.job_name,
+            idempotency_key: self.idempotency_key,
+        })
+    }
+}
+
 /// `print.submit` / `POST /v1/print`: `{ printerId, type, ...type-specific fields }`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -263,18 +419,31 @@ impl TextPrintParams {
     }
 }
 
+/// A `print.submit` request split by document type.
+#[derive(Debug)]
+pub enum TypedPrint {
+    Ready(PrintRequest),
+    Pending(PendingRequest),
+}
+
 impl GenericPrintParams {
-    pub fn into_request(self, max_bytes: u64) -> Result<PrintRequest, PrintError> {
+    pub fn into_typed(self, max_bytes: u64) -> Result<TypedPrint, PrintError> {
         let rest = Value::Object(self.rest);
         match self.document_type.to_ascii_uppercase().as_str() {
-            "RAW" => parse_params::<RawPrintParams>(rest)?.into_request(max_bytes),
-            "TEXT" => parse_params::<TextPrintParams>(rest)?.into_request(max_bytes),
-            "PDF" | "HTML" | "IMAGE" => Err(PrintError::new(
-                ErrorCode::UnsupportedDocument,
-                format!(
-                    "{} printing is not available in this agent version",
-                    self.document_type.to_ascii_uppercase()
-                ),
+            "RAW" => Ok(TypedPrint::Ready(
+                parse_params::<RawPrintParams>(rest)?.into_request(max_bytes)?,
+            )),
+            "TEXT" => Ok(TypedPrint::Ready(
+                parse_params::<TextPrintParams>(rest)?.into_request(max_bytes)?,
+            )),
+            "HTML" => Ok(TypedPrint::Ready(
+                parse_params::<HtmlPrintParams>(rest)?.into_request(max_bytes)?,
+            )),
+            "PDF" => Ok(TypedPrint::Pending(
+                parse_params::<PdfPrintParams>(rest)?.into_pending()?,
+            )),
+            "IMAGE" => Ok(TypedPrint::Pending(
+                parse_params::<ImagePrintParams>(rest)?.into_pending()?,
             )),
             other => Err(PrintError::new(
                 ErrorCode::UnsupportedDocument,
@@ -408,17 +577,52 @@ mod tests {
             "type": "text", "printer": "Laser", "text": "hi", "options": {"mode": "RAW"}, "copies": 2
         }))
         .expect("parse");
-        let req = p.into_request(100).expect("request");
+        let TypedPrint::Ready(req) = p.into_typed(100).expect("request") else {
+            panic!("ready")
+        };
         assert_eq!(req.copies, 2);
         assert!(matches!(req.document, Document::Text(_)));
 
+        let p: GenericPrintParams = parse_params(serde_json::json!({
+            "type": "PDF", "printer": "Laser", "data": "JVBERi0=", "options": {"pageRange": "1-2", "duplex": "LONG_EDGE"}
+        }))
+        .expect("parse");
+        let TypedPrint::Pending(pending) = p.into_typed(100).expect("pending") else {
+            panic!("pending")
+        };
+        assert!(matches!(pending.source, SourceSpec::Inline { .. }));
+        let req = pending.complete(Bytes::from_static(b"%PDF-"));
+        let Document::Pdf(pdf) = req.document else {
+            panic!("pdf")
+        };
+        assert_eq!(pdf.options.duplex, Some(Duplex::LongEdge));
+
         let p: GenericPrintParams =
-            parse_params(serde_json::json!({"type": "PDF", "printer": "Laser", "data": ""}))
-                .expect("parse");
+            parse_params(serde_json::json!({"type": "EXCEL", "printer": "Laser"})).expect("parse");
         assert_eq!(
-            p.into_request(100).expect_err("pdf").error_code,
+            p.into_typed(100).expect_err("excel").error_code,
             ErrorCode::UnsupportedDocument
         );
+    }
+
+    #[test]
+    fn sources_are_mutually_exclusive() {
+        let both = parse_params::<PdfPrintParams>(
+            serde_json::json!({"printer": "P", "data": "x", "path": "C:/a.pdf"}),
+        )
+        .expect("parse");
+        assert!(both.into_pending().is_err());
+        let none =
+            parse_params::<ImagePrintParams>(serde_json::json!({"printer": "P"})).expect("parse");
+        assert!(none.into_pending().is_err());
+        let url = parse_params::<ImagePrintParams>(
+            serde_json::json!({"printer": "P", "url": "https://x/y.png"}),
+        )
+        .expect("parse");
+        assert!(matches!(
+            url.into_pending().expect("pending").source,
+            SourceSpec::Url(_)
+        ));
     }
 
     #[test]

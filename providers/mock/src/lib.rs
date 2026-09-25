@@ -304,7 +304,8 @@ impl PrintProvider for MockProvider {
         let state = self.lock();
         Self::find(&state, printer).is_ok_and(|p| match kind {
             PayloadKind::Raw => p.raw,
-            PayloadKind::Text => p.text,
+            // `text` marks a driver-backed printer that accepts graphics.
+            PayloadKind::Text | PayloadKind::Pdf | PayloadKind::Image => p.text,
         })
     }
 

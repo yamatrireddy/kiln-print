@@ -17,6 +17,9 @@ pub struct RenderTarget {
     pub printer: Printer,
     /// Payload kinds the destination provider accepts for this printer.
     pub accepted: Vec<PayloadKind>,
+    /// Printer's default paper (portrait, mm), filled in for document types that are
+    /// paginated before printing (HTML).
+    pub default_paper_mm: Option<(f32, f32)>,
 }
 
 pub trait DocumentRenderer: Send + Sync {

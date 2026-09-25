@@ -7,6 +7,7 @@ Kiln Print lets web apps, desktop apps and backend services print to printers at
 | Technology choice | [adr/0001-technology-stack.md](adr/0001-technology-stack.md) |
 | Why a user-session process | [adr/0002-user-session-agent.md](adr/0002-user-session-agent.md) |
 | Retry policy | [adr/0003-no-automatic-print-retries.md](adr/0003-no-automatic-print-retries.md) |
+| PDF / image / HTML rendering | [adr/0004-document-rendering.md](adr/0004-document-rendering.md) |
 | Wire protocol | [protocol.md](protocol.md) |
 | Security and trust model | [security-model.md](security-model.md) |
 | Job lifecycle | [print-job-lifecycle.md](print-job-lifecycle.md) |
@@ -37,7 +38,7 @@ flowchart TB
 
     subgraph Core["kiln-core (platform-independent)"]
         ENG["PrintEngine / job manager"]
-        REN["RendererRegistry<br/>DocumentRenderer"]
+        REN["RendererRegistry<br/>RAW · TEXT · PDF · IMAGE · HTML"]
         PRO["ProtocolRegistry<br/>PrinterProtocol"]
         Q["Per-printer FIFO queues<br/>+ byte budget"]
         MON["Spooler monitor"]
@@ -64,6 +65,8 @@ flowchart TB
     REPO -. implemented by .-> DB
     Q --> WIN & MOCK & LNX & MAC & TCP & SER
     WIN --> SPOOL["Windows spooler"] --> PRN["Printers<br/>USB · LPT · network · virtual"]
+    REN -. HTML .-> CHR["Headless Edge/Chrome<br/>(sandboxed, per render)"]
+    WIN -. PDF .-> WPDF["Windows.Data.Pdf"]
     TCP --> P9100["Printer :9100"]
     SER --> COM["COM / tty"]
 ```
@@ -74,12 +77,12 @@ flowchart TB
 |---|---|---|---|
 | `print-core/` | `kiln-core` | Model, error model, extension traits, engine, queues, monitor, discovery | forbidden |
 | `protocols/` | `kiln-protocols` | Printer-language descriptors plus read-only inspection (ZPL, EPL, CPCL, TSPL, ESC/POS, ESC/P, RAW) | forbidden |
-| `renderers/` | `kiln-renderers` | RAW passthrough, text (RAW-encoded or native layout); PDF/HTML/image in Phase 2 | forbidden |
+| `renderers/` | `kiln-renderers` | RAW passthrough; text (RAW-encoded or native layout); PDF validation; image decoding; HTML → PDF in a sandboxed headless browser | forbidden |
 | `providers/windows/` | `kiln-provider-windows` | Winspool/GDI adapter; the only crate that calls Win32 | allowed, documented per block |
 | `providers/mock/` | `kiln-provider-mock` | Scriptable provider for CI and `--mock` development | forbidden |
 | `providers/linux/`, `providers/macos/` | — | Placeholders with implementation notes (Phase 6) | — |
 | `agent/` | `kiln-agent` | Config, logging, SQLite, security, WebSocket/REST API, CLI | forbidden |
-| `sdk/typescript/` | — | TypeScript SDK (Phase 2) | — |
+| `sdk/typescript/` | `@kiln-print/sdk` | TypeScript SDK for browsers and Node | — |
 | `dashboard/` | — | Management UI (Phase 5) | — |
 | `examples/` | — | Runnable Node examples (ZPL, ESC/P, text, raw file) | — |
 | `tests/hardware/` | — | Hardware test procedures and printer setup script | — |

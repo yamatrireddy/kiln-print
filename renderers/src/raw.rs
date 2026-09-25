@@ -74,6 +74,7 @@ mod tests {
                 capabilities: None,
             },
             accepted,
+            default_paper_mm: None,
         }
     }
 
