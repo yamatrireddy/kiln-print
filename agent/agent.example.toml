@@ -1,0 +1,61 @@
+# Kiln Print agent configuration.
+#
+# Default location: %APPDATA%\KilnPrint\agent.toml (Windows),
+#                   ~/.config/KilnPrint/agent.toml (Linux), ~/Library/Application Support/KilnPrint (macOS).
+# Every setting is optional; the values below are the defaults unless noted.
+# `kiln-agent config` prints the effective configuration.
+
+[server]
+bind = "127.0.0.1:18731"          # loopback only
+allow_non_loopback = false        # must be true to bind any other address (not recommended before TLS)
+max_connections = 64
+handshake_timeout_secs = 10
+heartbeat_secs = 30
+max_in_flight_per_connection = 16
+
+[security]
+# admin_token_file = "C:\\Users\\me\\AppData\\Local\\KilnPrint\\admin.token"
+admin_origins = []                # browser origins allowed to use the admin token (normally none)
+
+[security.rate_limit]
+requests_per_second = 50.0
+burst = 100
+
+# One entry per trusted application. Generate with:
+#   kiln-agent new-client --id lab-app --name "Lab Application" --origin https://lab.example.com
+# [[security.clients]]
+# id = "lab-app"
+# name = "Lab Application"
+# token_sha256 = "<64 hex characters printed by new-client>"
+# origins = ["https://lab.example.com"]
+# permissions = ["printers.read", "print", "jobs.read", "jobs.cancel", "queue.read"]
+# printers = ["ZDesigner ZD421-203dpi ZPL"]   # or ["*"]
+
+[limits]
+max_document_bytes = 67108864     # 64 MiB decoded
+max_queued_bytes = 536870912      # 512 MiB across all agent queues
+queue_capacity_per_printer = 128
+max_copies = 999
+
+[jobs]
+submit_timeout_secs = 120         # watchdog; expiry fails the job with outcome UNKNOWN (never retried)
+monitor_interval_ms = 1000
+monitor_max_interval_ms = 10000
+retention_days = 30               # 0 = keep forever
+strict_languages = false          # true = ZPL/EPL/… inspection warnings reject the job
+
+[discovery]
+interval_secs = 5
+
+[providers]
+windows = true                    # OS spooler (Windows only)
+mock = false                      # simulated printers for development
+
+[storage]
+# data_dir = "D:\\KilnData"      # default: %LOCALAPPDATA%\KilnPrint
+audit_retention_days = 90
+
+[logging]
+level = "info"                    # RUST_LOG overrides, e.g. "info,kiln::monitor=debug"
+file = true                       # daily-rotated JSON in <data_dir>/logs (14 files kept)
+console = true

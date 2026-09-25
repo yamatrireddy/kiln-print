@@ -1,0 +1,32 @@
+[package]
+name = "kiln-provider-windows"
+description = "Windows print-spooler provider for Kiln Print (Winspool + GDI)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+kiln-core.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Printing",
+    "Win32_Security",
+    "Win32_Storage_Xps",
+    "Win32_System_SystemInformation",
+    "Win32_System_Time",
+]
+
+[dev-dependencies]
+bytes.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
