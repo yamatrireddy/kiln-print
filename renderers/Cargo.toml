@@ -1,0 +1,15 @@
+[package]
+name = "kiln-renderers"
+description = "Document renderers for Kiln Print (RAW passthrough, text; PDF/HTML/image in later phases)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes.workspace = true
+encoding_rs.workspace = true
+kiln-core.workspace = true
+
+[lints]
+workspace = true

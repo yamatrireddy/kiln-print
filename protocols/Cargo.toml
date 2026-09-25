@@ -1,0 +1,13 @@
+[package]
+name = "kiln-protocols"
+description = "Printer command-language descriptors and read-only payload inspection (ZPL, EPL, CPCL, TSPL, ESC/POS, ESC/P)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+kiln-core.workspace = true
+
+[lints]
+workspace = true

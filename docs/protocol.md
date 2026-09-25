@@ -1,0 +1,175 @@
+# Wire protocol v1
+
+JSON over WebSocket (`/v1/ws`) and REST (`/v1/*`) on the agent's loopback listener (default `127.0.0.1:18731`). Phase 4 adds TLS (`wss://localhost:18731`). The message shapes will not change.
+
+## Versioning
+
+- Every envelope carries `protocolVersion`. The current and only version is `1`.
+- The client lists the versions it supports in `session.hello`. The agent chooses the highest mutual version, or replies `UNSUPPORTED_PROTOCOL_VERSION` with `details.supported`.
+- Within a major version, changes are additive only: new methods, new optional fields, new events, new error codes. Clients must ignore unknown fields and events. Request parameters are strict (`deny_unknown_fields`), so a misspelt option fails loudly instead of printing with defaults.
+
+## Envelopes
+
+```jsonc
+// client → agent
+{ "protocolVersion": 1, "type": "request", "id": "r-42", "method": "print.raw", "params": { … } }
+
+// agent → client (exactly one per request id)
+{ "protocolVersion": 1, "type": "response", "id": "r-42", "ok": true,  "result": { … } }
+{ "protocolVersion": 1, "type": "response", "id": "r-42", "ok": false, "error": { "errorCode": "PRINTER_NOT_FOUND", … } }
+
+// agent → client (unsolicited)
+{ "protocolVersion": 1, "type": "event", "event": "job.completed", "seq": 17,
+  "timestamp": "2026-09-25T14:00:00.8Z", "data": { …job… } }
+```
+
+- `id` is 1–128 characters and unique within a session. A repeated id is rejected (`INVALID_PAYLOAD`), which guards against replayed frames.
+- `seq` increases by one per event within a session. A gap, or a `session.lagged` event with `{ missedEvents }`, means events were dropped for a slow consumer. Resynchronise with `jobs.get` or `jobs.list`.
+- Requests on one connection are processed concurrently (up to 16 in flight). Responses may arrive out of order, so match them by `id`.
+- **Ordering caveat:** a job's `job.created` and `job.queued` events can arrive *before* the response that returns its `jobId`. Buffer unknown-job events briefly or reconcile with `jobs.get`.
+- Only text frames are accepted. Binary frames get an `INVALID_PAYLOAD` response.
+
+## Handshake
+
+The first message must be `session.hello` and must arrive within `server.handshake_timeout_secs` (default 10 s). Anything else, a bad token, a disallowed origin or a version mismatch gets an error response, and the connection is closed with code 1008.
+
+```jsonc
+{ "protocolVersion": 1, "type": "request", "id": "1", "method": "session.hello", "params": {
+    "protocolVersions": [1],
+    "client": { "name": "Lab Application", "version": "4.2.0" },
+    "auth": { "type": "token", "token": "kiln_…" } } }
+```
+
+Result:
+
+```jsonc
+{
+  "protocolVersion": 1,
+  "sessionId": "8f0c…",
+  "agent": { "name": "kiln-agent", "version": "0.1.0" },
+  "client": { "clientId": "lab", "name": "Lab Application", "kind": "CLIENT",
+              "permissions": ["printers.read", "print", "jobs.read"], "printers": ["Zebra ZD421"],
+              "origin": "https://lab.example.com" },
+  "limits": { "maxDocumentBytes": 67108864, "maxMessageBytes": 89544024, "maxCopies": 999 },
+  "features": { "documentTypes": ["RAW", "TEXT"], "languages": [ { "id": "ZPL", … }, … ] },
+  "heartbeatSeconds": 30
+}
+```
+
+The agent pings every `heartbeatSeconds` and closes connections that are silent for three intervals.
+
+## Methods
+
+| Method | Permission | Params | Result |
+|---|---|---|---|
+| `session.ping` | — | — | `{ time }` |
+| `printers.list` | `printers.read` | — | `Printer[]` (only printers in the client's scope) |
+| `printers.default` | `printers.read` | — | `Printer \| null` |
+| `printers.get` | `printers.read` | `printerId` or `printer` (name) | `Printer` with `capabilities` |
+| `printers.capabilities` | `printers.read` | `printerId` or `printer` | `PrinterCapabilities` |
+| `print.submit` | `print` | `type` (`RAW`, `TEXT`; `PDF`/`HTML`/`IMAGE` in Phase 2) plus that type's fields | `Job` |
+| `print.raw` | `print` | see below | `Job` |
+| `print.text` | `print` | see below | `Job` |
+| `jobs.list` | `jobs.read` | `status` (string, comma list or array), `printerId`, `clientId`\*, `since`, `until`, `limit` (≤ 500), `offset` | `Job[]`, newest first |
+| `jobs.get` | `jobs.read` | `jobId` | `Job` |
+| `jobs.cancel` | `jobs.cancel` (own), `jobs.cancel.all` | `jobId` | `Job` |
+| `queue.list` | `queue.read` | — | `QueueSummary[]` |
+| `queue.get` | `queue.read` | `printerId` or `printer` | `{ agentQueue: Job[], spoolerQueue: QueueEntry[] }` |
+| `clients.list` | `clients.read` | — | configured clients with live sessions |
+
+\* `clientId` is honoured only with `jobs.read.all`. Other clients always see only their own jobs. A job that exists but belongs to someone else is reported as `JOB_NOT_FOUND`, and an out-of-scope printer as `PRINTER_NOT_FOUND`.
+
+### `print.raw`
+
+```jsonc
+{
+  "printerId": "windows-5c1e…",     // or "printer": "Zebra ZD421"  (exactly one)
+  "data": "XlhBXkZPNTAsNTBeRkRIaV5GU15YWg==",
+  "encoding": "base64",              // base64 (default, alias "binary") | hex | utf8 | latin1
+  "language": "ZPL",                 // optional: RAW, ZPL, EPL, CPCL, TSPL, ESC/POS, ESC/P (+ aliases)
+  "copies": 1,                       // 1..maxCopies; RAW copies = payload written N times in one spool job
+  "jobName": "Order 1001 label",     // shown in the OS queue; control characters stripped
+  "idempotencyKey": "order-1001/label-1"
+}
+```
+
+`idempotencyKey` (1–128 printable ASCII characters, scoped per client) names exactly one job, permanently, for as long as that job's record is retained. Resubmitting with the same key returns the original job in whatever state it is in, including `FAILED`. To try again after a failure, use a new key. A reused key never prints twice.
+
+Bytes reach the device exactly as decoded. `language` only selects inspection. Warnings (for example "no ^XZ format end") are returned in `job.warnings`, or rejected as errors when `jobs.strict_languages` is on.
+
+### `print.text`
+
+```jsonc
+{
+  "printer": "Epson LQ-590",
+  "text": "Line 1\nLine 2\fPage 2",
+  "options": {
+    "mode": "RAW",                   // RENDERED (default, driver/GDI) | RAW (encoded bytes)
+    "encoding": "ibm437",            // RAW: utf-8, ibm437, windows-1252, iso-8859-x, shift_jis, …
+    "lineEnding": "CRLF",            // RAW: CRLF | LF | CR
+    "formFeed": true,                // RAW: append FF (eject / next top-of-form)
+    "fontFamily": "Courier New",     // RENDERED
+    "fontSize": 10, "bold": false,   // RENDERED
+    "alignment": "LEFT",             // RENDERED: LEFT | CENTER | RIGHT
+    "marginsMm": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+    "orientation": "PORTRAIT",       // RENDERED
+    "wrap": true, "tabWidth": 8
+  }
+}
+```
+
+RAW text encoding is strict. A character the target encoding cannot represent is an `INVALID_PAYLOAD` error, never a silent `?`.
+
+## Events
+
+| Event | Payload | When |
+|---|---|---|
+| `job.created` | `Job` | request recorded (`RECEIVED`) |
+| `job.queued` | `Job` | validated, rendered and placed in the printer's queue |
+| `job.spooled` | `Job` | the OS spooler accepted it (`delivery = SPOOLER_ACCEPTED`) |
+| `job.printing` | `Job` | the spooler reports printing |
+| `job.updated` | `Job` | non-status change, e.g. `condition` became `PAPER_OUT` or cleared |
+| `job.completed` / `job.failed` / `job.cancelled` | `Job` | terminal |
+| `printer.connected` / `printer.disconnected` | `Printer` | discovery found or lost a printer |
+| `printer.status.changed` | `Printer` | online, status, conditions or default changed |
+| `session.lagged` | `{ missedEvents }` | this session missed events |
+
+## Errors
+
+`{ errorCode, message, jobId, printerId, recoverable, details }`. `message` is human-readable and never contains stack traces or file paths.
+
+| Code | Meaning | REST |
+|---|---|---|
+| `AUTHENTICATION_REQUIRED` | no or invalid handshake / bearer token | 401 |
+| `CLIENT_NOT_TRUSTED` | unknown credentials | 401 |
+| `ACCESS_DENIED` | missing permission, printer outside scope, or origin not allowed | 403 |
+| `PRINTER_NOT_FOUND`, `JOB_NOT_FOUND` | not found, or not visible to this client | 404 |
+| `INVALID_PAYLOAD` | malformed JSON, unknown field, bad encoding, bad option | 400 |
+| `INVALID_JOB_STATE` | e.g. cancelling a completed job | 409 |
+| `PAYLOAD_TOO_LARGE` | document over `maxDocumentBytes` | 413 |
+| `UNSUPPORTED_DOCUMENT`, `UNSUPPORTED_OPERATION`, `UNSUPPORTED_PROTOCOL_VERSION` | not available for this printer or agent | 422 |
+| `RATE_LIMITED` | per-client rate or concurrency limit | 429 |
+| `QUEUE_FULL`, `PRINTER_BUSY`, `PRINTER_OFFLINE`, `PAPER_OUT`, `PAPER_JAM` | printer or queue condition | 503 |
+| `SPOOLER_ERROR`, `PRINT_FAILED`, `CONNECTION_ERROR` | OS or device failure | 502 |
+| `TIMEOUT` | submission watchdog expired (outcome unknown) | 504 |
+| `INTERNAL_ERROR` | bug; details are in the agent log | 500 |
+
+`recoverable: true` means the condition can clear. It does **not** mean an automatic retry is safe. Check `details.outcome` (`NOT_PRINTED` or `UNKNOWN`) and see [ADR 0003](adr/0003-no-automatic-print-retries.md).
+
+A request that fails validation still creates a job (status `FAILED`), and the error carries its `jobId`. Every request is auditable.
+
+## REST mapping
+
+All REST routes require `Authorization: Bearer <token>`, and responses use the same `{ protocolVersion, ok, result | error }` body. No CORS headers are sent, so browser apps must use the WebSocket API.
+
+| REST | Equivalent |
+|---|---|
+| `GET /v1/health` (no auth) | liveness: `{ status, protocolVersions }` |
+| `GET /v1/printers` · `/v1/printers/default` · `/v1/printers/{id}` · `/v1/printers/{id}/capabilities` | `printers.*` |
+| `POST /v1/print` · `/v1/print/raw` · `/v1/print/text` → **202** | `print.*` |
+| `POST /v1/print/pdf` · `/html` · `/image` | 422 until Phase 2 |
+| `GET /v1/jobs?status=&printerId=&clientId=&since=&until=&limit=&offset=` | `jobs.list` |
+| `GET /v1/jobs/{id}` · `DELETE /v1/jobs/{id}` | `jobs.get` · `jobs.cancel` |
+| `GET /v1/queue` · `/v1/queue/{printerId}` | `queue.list` · `queue.get` |
+| `GET /v1/clients` | `clients.list` |
+| `GET /v1/audit?limit=` | audit log (local administrator only) |
