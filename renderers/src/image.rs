@@ -109,32 +109,52 @@ impl DocumentRenderer for ImageRenderer {
 
 impl ImageRenderer {
     fn decode(&self, data: &[u8], format: ImageFormat) -> Result<DynamicImage> {
-        let mut reader = ImageReader::with_format(Cursor::new(data), format);
-        let mut limits = Limits::default();
-        limits.max_image_width = Some(40_000);
-        limits.max_image_height = Some(40_000);
-        limits.max_alloc = Some(self.max_pixels.saturating_mul(4));
-        reader.limits(limits);
-        let (w, h) = reader
-            .into_dimensions()
-            .map_err(|e| PrintError::invalid_payload(format!("unreadable image: {e}")))?;
-        if u64::from(w) * u64::from(h) > self.max_pixels {
-            return Err(PrintError::new(
-                ErrorCode::PayloadTooLarge,
-                format!(
-                    "image is {w}x{h} pixels; the limit is {} pixels",
-                    self.max_pixels
-                ),
-            ));
-        }
-        let mut reader = ImageReader::with_format(Cursor::new(data), format);
-        let mut limits = Limits::default();
-        limits.max_alloc = Some(self.max_pixels.saturating_mul(8));
-        reader.limits(limits);
-        reader
-            .decode()
-            .map_err(|e| PrintError::invalid_payload(format!("could not decode image: {e}")))
+        decode_format(data, format, self.max_pixels)
     }
+}
+
+/// Decodes any supported format with dimension and allocation limits.
+pub(crate) fn decode_limited(data: &[u8], max_pixels: u64) -> Result<DynamicImage> {
+    decode_format(data, format_of(data)?, max_pixels)
+}
+
+fn decode_format(data: &[u8], format: ImageFormat, max_pixels: u64) -> Result<DynamicImage> {
+    let mut reader = ImageReader::with_format(Cursor::new(data), format);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(40_000);
+    limits.max_image_height = Some(40_000);
+    limits.max_alloc = Some(max_pixels.saturating_mul(4));
+    reader.limits(limits);
+    let (w, h) = reader
+        .into_dimensions()
+        .map_err(|e| PrintError::invalid_payload(format!("unreadable image: {e}")))?;
+    if u64::from(w) * u64::from(h) > max_pixels {
+        return Err(PrintError::new(
+            ErrorCode::PayloadTooLarge,
+            format!("image is {w}x{h} pixels; the limit is {max_pixels} pixels"),
+        ));
+    }
+    let mut reader = ImageReader::with_format(Cursor::new(data), format);
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(max_pixels.saturating_mul(8));
+    reader.limits(limits);
+    reader
+        .decode()
+        .map_err(|e| PrintError::invalid_payload(format!("could not decode image: {e}")))
+}
+
+/// Grayscale on white paper (transparency composited), for 1-bit printing.
+pub(crate) fn flatten_on_white_gray(image: DynamicImage) -> image::GrayImage {
+    let (w, h) = (image.width(), image.height());
+    let rgb = flatten_on_white(image);
+    let luma = rgb
+        .chunks_exact(3)
+        .map(|p| {
+            ((u32::from(p[0]) * 299 + u32::from(p[1]) * 587 + u32::from(p[2]) * 114 + 500) / 1000)
+                as u8
+        })
+        .collect();
+    image::GrayImage::from_raw(w, h, luma).unwrap_or_else(|| image::GrayImage::new(w, h))
 }
 
 /// Converts to RGB, compositing any transparency over white paper (dropping alpha would
@@ -233,6 +253,7 @@ mod tests {
                 status: PrinterState::Ready,
                 conditions: vec![],
                 queued_jobs: None,
+                language: None,
                 capabilities: None,
             },
             accepted: vec![PayloadKind::Image],

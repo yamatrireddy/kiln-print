@@ -2,6 +2,9 @@ import { bytesToBase64, randomId, toBase64 } from "./encoding.ts";
 import { FATAL_CONNECT_ERRORS, KilnError } from "./errors.ts";
 import type {
   BinaryInput,
+  DotMatrixDocument,
+  LabelDocument,
+  ReceiptDocument,
   ErrorPayload,
   HtmlOptions,
   ImageOptions,
@@ -75,13 +78,19 @@ type Source = { data: BinaryInput; path?: never; url?: never } | { path: string;
 export type PdfPrint = PrinterRef & JobCommon & Source & { options?: PdfOptions };
 export type ImagePrint = PrinterRef & JobCommon & Source & { options?: ImageOptions };
 export type HtmlPrint = PrinterRef & JobCommon & { html: string; options?: HtmlOptions };
+export type LabelPrint = PrinterRef & JobCommon & { label: LabelDocument };
+export type ReceiptPrint = PrinterRef & JobCommon & { receipt: ReceiptDocument };
+export type DotMatrixPrint = PrinterRef & JobCommon & { document: DotMatrixDocument };
 
 export type PrintRequest =
   | ({ type: "RAW" } & RawPrint)
   | ({ type: "TEXT" } & TextPrint)
   | ({ type: "PDF" } & PdfPrint)
   | ({ type: "IMAGE" } & ImagePrint)
-  | ({ type: "HTML" } & HtmlPrint);
+  | ({ type: "HTML" } & HtmlPrint)
+  | ({ type: "LABEL" } & LabelPrint)
+  | ({ type: "RECEIPT" } & ReceiptPrint)
+  | ({ type: "DOT_MATRIX" } & DotMatrixPrint);
 
 export interface ClientEvents {
   state: ConnectionState;
@@ -539,6 +548,12 @@ export class PrintClient {
         return this.printImage(request);
       case "HTML":
         return this.printHtml(request);
+      case "LABEL":
+        return this.printLabel(request);
+      case "RECEIPT":
+        return this.printReceipt(request);
+      case "DOT_MATRIX":
+        return this.printDotMatrix(request);
     }
   }
 
@@ -569,6 +584,21 @@ export class PrintClient {
 
   printHtml(request: HtmlPrint): Promise<Job> {
     return this.#print("print.html", request, { html: request.html, options: request.options });
+  }
+
+  /** A label described once; the agent encodes it as ZPL, EPL, TSPL or CPCL. */
+  printLabel(request: LabelPrint): Promise<Job> {
+    return this.#print("print.label", request, { label: request.label });
+  }
+
+  /** An ESC/POS receipt (text styles, columns, barcodes, QR, logo, cut, drawer). */
+  printReceipt(request: ReceiptPrint): Promise<Job> {
+    return this.#print("print.receipt", request, { receipt: request.receipt });
+  }
+
+  /** ESC/P text for dot-matrix printers (pitch, spacing, forms), sent as RAW bytes. */
+  printDotMatrix(request: DotMatrixPrint): Promise<Job> {
+    return this.#print("print.dotmatrix", request, { document: request.document });
   }
 
   #print(method: string, request: PrinterRef & JobCommon, body: Record<string, unknown>): Promise<Job> {

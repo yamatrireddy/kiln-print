@@ -29,6 +29,18 @@ Start the agent (`cargo run -p kiln-agent -- run`), then export the token printe
 | Dot-matrix | Epson LQ/LX/FX series | `node examples/dot-matrix/print-escp-form.mjs`, and `print-text.mjs` with `KILN_TEXT_MODE=RAW` | Resident font, condensed table, bold, form feed to the next top-of-form on tractor paper. |
 | PDF virtual printer | Microsoft Print to PDF | `print-text.mjs` (RENDERED) | A save dialog appears (the `PORTPROMPT:` port), and the saved PDF contains the text. |
 
+### Phase 3 language checks
+
+| Printer | Command | Expected |
+|---|---|---|
+| Zebra (ZPL) | `examples/barcode/print-label.mjs` | Text, Code 128 and QR positioned as specified. Text containing `^XZ` prints literally. |
+| Zebra (EPL model, e.g. LP 2844) | label with `"language": "EPL"` | Same layout. Data Matrix is refused. |
+| TSC (TSPL) | label with `"language": "TSPL"` | Same layout; quotes in text print. |
+| Mobile (CPCL) | label with `"language": "CPCL"` | Same layout. |
+| ESC/POS receipt | `examples/receipt/print-receipt.mjs` | Centred double-size header, aligned columns, € sign, QR, partial cut, drawer kick. |
+| Dot matrix | `examples/dot-matrix/print-form.mjs` on tractor paper | NLQ, 11" form, perforation skipped, 2 copies each starting at top-of-form. |
+| Network printer | `[[network_printers]]` with `status = "ZPL"` or `"ESC/POS"`; open the cover or remove paper | `printers.list` shows `HEAD_OPEN` / `PAPER_OUT` within about 10 s. The job completes with `BYTES_DELIVERED`. |
+
 ## 3. Failure scenarios (run per category where applicable)
 
 | Scenario | Procedure | Expected |

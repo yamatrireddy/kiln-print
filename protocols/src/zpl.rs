@@ -19,6 +19,13 @@ impl PrinterProtocol for Zpl {
         &INFO
     }
 
+    fn encode_label(
+        &self,
+        label: &kiln_core::model::LabelDocument,
+    ) -> Option<kiln_core::error::Result<Vec<u8>>> {
+        Some(crate::label::zpl::encode(label))
+    }
+
     fn inspect(&self, data: &[u8]) -> Inspection {
         let mut out = Inspection::default();
         let starts = count(data, b"^XA");

@@ -10,6 +10,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::error::Result;
+use crate::model::LabelDocument;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LanguageFamily {
@@ -50,6 +53,12 @@ pub trait PrinterProtocol: Send + Sync {
     /// whether warnings are fatal (`strict_languages`).
     fn inspect(&self, _data: &[u8]) -> Inspection {
         Inspection::default()
+    }
+
+    /// Encodes a language-neutral label into this language. `None` means the language
+    /// has no label support (receipt and dot-matrix languages use their own documents).
+    fn encode_label(&self, _label: &LabelDocument) -> Option<Result<Vec<u8>>> {
+        None
     }
 }
 

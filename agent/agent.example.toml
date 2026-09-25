@@ -5,6 +5,17 @@
 # Every setting is optional; the values below are the defaults unless noted.
 # `kiln-agent config` prints the effective configuration.
 
+# Direct RAW TCP printers (port 9100 / JetDirect). Only printers listed here can be
+# reached directly; clients can never name a host themselves.
+# [[network_printers]]
+# name = "Dock Zebra"
+# host = "192.168.1.50"
+# port = 9100
+# language = "ZPL"            # ZPL | EPL | TSPL | CPCL | ESC/POS | ESC/P
+# status = "ZPL"              # NONE | ZPL (~HS) | ESC/POS (DLE EOT): real device status
+# connect_timeout_ms = 3000
+# write_timeout_ms = 30000
+
 [server]
 bind = "127.0.0.1:18731"          # loopback only
 allow_non_loopback = false        # must be true to bind any other address (not recommended before TLS)

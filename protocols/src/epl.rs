@@ -19,6 +19,13 @@ impl PrinterProtocol for Epl {
         &INFO
     }
 
+    fn encode_label(
+        &self,
+        label: &kiln_core::model::LabelDocument,
+    ) -> Option<kiln_core::error::Result<Vec<u8>>> {
+        Some(crate::label::epl::encode(label))
+    }
+
     fn inspect(&self, data: &[u8]) -> Inspection {
         let mut out = Inspection::default();
         if looks_like_zpl(data) {

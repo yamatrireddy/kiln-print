@@ -961,7 +961,10 @@ async fn html_is_rendered_to_pdf_before_printing() {
         eprintln!("skipping: browser tests disabled or no Edge/Chrome/Chromium installed");
         return;
     }
-    let t = start().await;
+    // Keep the render deadline (including one startup retry) inside the client's 20 s wait.
+    let mut config = base_config(&temp_dir());
+    config.html.timeout_secs = 15;
+    let t = start_with(config, default_mock()).await;
     let mut c = Client::connect(t.addr, ADMIN_TOKEN, None).await;
     let r = c
         .call(
@@ -1016,5 +1019,202 @@ async fn path_sources_obey_the_allowlist() {
         .call("print.pdf", json!({ "printer": "Laser", "path": outside }))
         .await;
     assert_eq!(error_code(&r), "ACCESS_DENIED");
+    t.stop().await;
+}
+
+// ------------------------------------------------------------------ Phase 3 documents
+
+fn label_fleet() -> Arc<MockProvider> {
+    Arc::new(MockProvider::new(vec![
+        MockPrinter::new("Zebra").raw_only().language("ZPL"),
+        MockPrinter::new("Receipt").raw_only().language("ESC/POS"),
+        MockPrinter::new("Epson LQ").language("ESC/P"),
+        MockPrinter::new("Unknown Label").raw_only(),
+    ]))
+}
+
+fn raw_bytes(t: &TestAgent, index: usize) -> Vec<u8> {
+    match &t.mock.submissions()[index].payload {
+        PrintPayload::Raw(raw) => raw.bytes.to_vec(),
+        other => panic!("expected RAW, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn structured_documents_are_encoded_for_each_printer() {
+    let t = start_with(base_config(&temp_dir()), label_fleet()).await;
+    let mut c = Client::connect(t.addr, ADMIN_TOKEN, None).await;
+
+    let label = json!({
+        "widthMm": 100, "heightMm": 50,
+        "elements": [
+            { "type": "TEXT", "xMm": 5, "yMm": 5, "text": "Ship to: Jane ^XZ", "heightMm": 5 },
+            { "type": "BARCODE", "xMm": 5, "yMm": 15, "symbology": "CODE128", "data": "1Z999AA1" },
+            { "type": "QR", "xMm": 70, "yMm": 5, "data": "https://example.com/t/1" }
+        ]
+    });
+    let r = c
+        .call(
+            "print.label",
+            json!({ "printer": "Zebra", "label": label, "copies": 2 }),
+        )
+        .await;
+    assert_eq!(r["ok"], true, "{r}");
+    let done = c
+        .wait_event("job.completed", r["result"]["jobId"].as_str().expect("id"))
+        .await;
+    assert_eq!(done["data"]["documentType"], "LABEL");
+    assert_eq!(
+        done["data"]["language"], "ZPL",
+        "language taken from the printer hint"
+    );
+    let zpl = String::from_utf8(raw_bytes(&t, 0)).expect("utf8");
+    assert!(zpl.starts_with("^XA") && zpl.trim_end().ends_with("^XZ"));
+    assert_eq!(
+        zpl.matches("^XZ").count(),
+        1,
+        "client text cannot terminate the label"
+    );
+
+    let r = c
+        .call(
+            "print.submit",
+            json!({ "type": "LABEL", "printer": "Zebra", "label": { "widthMm": 60, "heightMm": 40, "language": "TSPL",
+                    "elements": [{ "type": "TEXT", "xMm": 2, "yMm": 2, "text": "override" }] } }),
+        )
+        .await;
+    assert_eq!(r["ok"], true, "{r}");
+    c.wait_event("job.completed", r["result"]["jobId"].as_str().expect("id"))
+        .await;
+    assert!(raw_bytes(&t, 1).starts_with(b"SIZE 60 mm,40 mm"));
+
+    let r = c
+        .call(
+            "print.receipt",
+            json!({ "printer": "Receipt", "receipt": { "widthChars": 32, "codePage": "ibm858", "items": [
+                { "type": "TEXT", "text": "KILN CAFE", "align": "CENTER", "bold": true, "doubleHeight": true },
+                { "type": "COLUMNS", "left": "Latte", "right": "3.80€" },
+                { "type": "QR", "data": "receipt/42", "align": "CENTER" }
+            ] } }),
+        )
+        .await;
+    assert_eq!(r["ok"], true, "{r}");
+    c.wait_event("job.completed", r["result"]["jobId"].as_str().expect("id"))
+        .await;
+    let escpos = raw_bytes(&t, 2);
+    assert!(escpos.starts_with(&[0x1B, b'@', 0x1B, b't', 19]));
+    assert!(escpos.ends_with(&[0x1D, b'V', 65, 3]), "cut at the end");
+
+    let r = c
+        .call(
+            "print.dotmatrix",
+            json!({ "printer": "Epson LQ", "document": { "cpi": 17, "formLengthInches": 12, "lines": [
+                "INVOICE 2026-0042", { "type": "LINE", "text": "TOTAL 43.90", "bold": true }
+            ] } }),
+        )
+        .await;
+    assert_eq!(r["ok"], true, "{r}");
+    c.wait_event("job.completed", r["result"]["jobId"].as_str().expect("id"))
+        .await;
+    let escp = raw_bytes(&t, 3);
+    assert!(escp.starts_with(&[0x1B, b'@']));
+    assert!(escp.windows(4).any(|w| w == [0x1B, b'C', 0, 12]));
+    assert_eq!(escp.last(), Some(&0x0C));
+
+    // No language anywhere: a clear error, not garbage on the printer.
+    let r = c
+        .call(
+            "print.label",
+            json!({ "printer": "Unknown Label", "label": label }),
+        )
+        .await;
+    assert_eq!(error_code(&r), "UNSUPPORTED_DOCUMENT");
+    // A receipt printer cannot take a label.
+    let r = c
+        .call(
+            "print.label",
+            json!({ "printer": "Receipt", "label": label }),
+        )
+        .await;
+    assert_eq!(error_code(&r), "UNSUPPORTED_DOCUMENT");
+    let r = c
+        .call(
+            "print.label",
+            json!({ "printer": "Zebra", "label": { "widthMm": 50, "heightMm": 30, "elements": [
+            { "type": "BARCODE", "xMm": 1, "yMm": 1, "symbology": "EAN13", "data": "12345" }] } }),
+        )
+        .await;
+    assert_eq!(
+        error_code(&r),
+        "INVALID_PAYLOAD",
+        "bad barcode data is caught before printing"
+    );
+    assert_eq!(t.mock.submissions().len(), 4);
+    t.stop().await;
+}
+
+#[tokio::test]
+async fn configured_network_printers_print_directly_over_tcp() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let printer = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut data = Vec::new();
+        stream.read_to_end(&mut data).expect("read");
+        data
+    });
+
+    let dir = temp_dir();
+    let mut config = base_config(&dir);
+    config.network_printers = vec![kiln_agent::config::NetworkPrinterConfig {
+        name: "Dock TSC".into(),
+        host: "127.0.0.1".into(),
+        port,
+        language: Some("TSPL".into()),
+        status: kiln_provider_tcp::StatusQuery::None,
+        connect_timeout_ms: 1000,
+        write_timeout_ms: 5000,
+    }];
+    let t = start_with(config, default_mock()).await;
+    let mut c = Client::connect(t.addr, ADMIN_TOKEN, None).await;
+
+    let printers = c.call("printers.list", json!({})).await;
+    let dock = printers["result"]
+        .as_array()
+        .expect("list")
+        .iter()
+        .find(|p| p["name"] == "Dock TSC")
+        .expect("dock")
+        .clone();
+    assert_eq!(dock["type"], "NETWORK");
+    assert_eq!(dock["language"], "TSPL");
+    assert_eq!(dock["port"], format!("tcp://127.0.0.1:{port}"));
+
+    let r = c
+        .call(
+            "print.label",
+            json!({ "printerId": dock["id"], "label": { "widthMm": 50, "heightMm": 25,
+                    "elements": [{ "type": "TEXT", "xMm": 2, "yMm": 2, "text": "direct" }] } }),
+        )
+        .await;
+    assert_eq!(r["ok"], true, "{r}");
+    let done = c
+        .wait_event("job.completed", r["result"]["jobId"].as_str().expect("id"))
+        .await;
+    assert_eq!(done["data"]["delivery"], "DEVICE_DELIVERED");
+    assert_eq!(done["data"]["completion"], "BYTES_DELIVERED");
+    let received = printer.join().expect("printer thread");
+    assert!(received.starts_with(b"SIZE 50 mm,25 mm"));
+    assert!(received.ends_with(b"PRINT 1\r\n"));
+
+    // Only configured hosts exist: a client cannot address a network location itself.
+    let r = c
+        .call(
+            "print.raw",
+            json!({ "printer": "tcp://10.0.0.1:9100", "data": "eA==" }),
+        )
+        .await;
+    assert_eq!(error_code(&r), "PRINTER_NOT_FOUND");
     t.stop().await;
 }

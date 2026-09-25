@@ -223,7 +223,19 @@ impl DocumentRenderer for HtmlRenderer {
             max_pdf_bytes: self.config.max_pdf_bytes,
         };
         let started = std::time::Instant::now();
-        let pdf = cdp::print_to_pdf(browser, &request, self.config.timeout)?;
+        let deadline = started + self.config.timeout;
+        let pdf = match cdp::print_to_pdf(browser, &request, self.config.timeout) {
+            // A browser that failed to start is replaced once; nothing has printed yet.
+            Err(e) if cdp::is_startup_failure(&e) && deadline > std::time::Instant::now() => {
+                tracing::warn!(target: "kiln::html", error = %e, "rendering engine did not start; retrying once");
+                cdp::print_to_pdf(
+                    browser,
+                    &request,
+                    deadline.saturating_duration_since(std::time::Instant::now()),
+                )?
+            }
+            other => other?,
+        };
         tracing::info!(target: "kiln::html", bytes = pdf.len(), elapsed_ms = started.elapsed().as_millis() as u64, "HTML rendered to PDF");
 
         // Margins are already inside the PDF pages, so print them at actual size: a page
@@ -260,6 +272,7 @@ mod tests {
                 status: kiln_core::model::PrinterState::Ready,
                 conditions: vec![],
                 queued_jobs: None,
+                language: None,
                 capabilities: None,
             },
             accepted: vec![PayloadKind::Pdf],

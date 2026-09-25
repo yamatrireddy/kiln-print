@@ -17,6 +17,9 @@ In a second terminal, export the admin token printed by `kiln-agent token` as `K
 | `pdf/print-pdf.mjs <file.pdf> <printer> [pageRange]` | Silent PDF printing with page setup (uses the SDK) |
 | `html/print-html.mjs` | An HTML invoice with a CSS `@page`, SVG barcode, page break and page-number footer (uses the SDK) |
 | `image/print-image.mjs <image> <printer> [fit]` | Image placement with margins (uses the SDK) |
+| `barcode/print-label.mjs` | A language-neutral shipping label, encoded by the agent as ZPL/EPL/TSPL/CPCL for the printer (uses the SDK) |
+| `receipt/print-receipt.mjs` | An ESC/POS receipt with columns, euro prices (IBM858), QR, cut and drawer (uses the SDK) |
+| `dot-matrix/print-form.mjs` | The dot-matrix invoice as a DOT_MATRIX document: NLQ, form length, perforation skip, condensed and bold (uses the SDK) |
 
 Select a printer with `KILN_PRINTER="<name or id>"`. The `--mock` flag adds simulated label, receipt, dot-matrix and direct-TCP printers.
 

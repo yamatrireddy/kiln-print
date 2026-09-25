@@ -67,12 +67,15 @@ The agent pings every `heartbeatSeconds` and closes connections that are silent 
 | `printers.default` | `printers.read` | — | `Printer \| null` |
 | `printers.get` | `printers.read` | `printerId` or `printer` (name) | `Printer` with `capabilities` |
 | `printers.capabilities` | `printers.read` | `printerId` or `printer` | `PrinterCapabilities` |
-| `print.submit` | `print` | `type` (`RAW`, `TEXT`, `PDF`, `IMAGE`, `HTML`) plus that type's fields | `Job` |
+| `print.submit` | `print` | `type` (`RAW`, `TEXT`, `PDF`, `IMAGE`, `HTML`, `LABEL`, `RECEIPT`, `DOT_MATRIX`) plus that type's fields | `Job` |
 | `print.raw` | `print` | see below | `Job` |
 | `print.text` | `print` | see below | `Job` |
 | `print.pdf` | `print` | see below | `Job` |
 | `print.image` | `print` | see below | `Job` |
 | `print.html` | `print` | see below | `Job` |
+| `print.label` | `print` | see below | `Job` |
+| `print.receipt` | `print` | see below | `Job` |
+| `print.dotmatrix` | `print` | see below | `Job` |
 | `jobs.list` | `jobs.read` | `status` (string, comma list or array), `printerId`, `clientId`\*, `since`, `until`, `limit` (≤ 500), `offset` | `Job[]`, newest first |
 | `jobs.get` | `jobs.read` | `jobId` | `Job` |
 | `jobs.cancel` | `jobs.cancel` (own), `jobs.cancel.all` | `jobId` | `Job` |
@@ -203,6 +206,91 @@ Transparency prints as white paper. Images larger than 80 megapixels are refused
 
 HTML is rendered by a sandboxed headless Edge, Chrome or Chromium. **JavaScript is disabled, and no network request of any kind leaves the renderer**, including to localhost. Supply barcodes and QR codes as inline SVG or `data:` images, and fonts as `data:` URIs or system fonts. Without paper settings, the printer's default paper is used. If no browser is installed, HTML is reported as unsupported.
 
+### `print.label`
+
+The label is described once and encoded by the agent as ZPL, EPL, TSPL or CPCL ([ADR 0005](adr/0005-label-receipt-dot-matrix-and-direct-tcp.md)).
+
+```jsonc
+{
+  "printer": "Dock Zebra",
+  "copies": 2,
+  "label": {
+    "widthMm": 100, "heightMm": 150, "dpi": 203,
+    "language": "ZPL",                    // optional; defaults to the printer's `language` hint
+    "gapMm": 3, "darkness": 20, "speed": 4,
+    "elements": [
+      { "type": "TEXT", "xMm": 5, "yMm": 5, "text": "Ship to: Jane", "heightMm": 5, "rotation": 0 },
+      { "type": "BARCODE", "xMm": 5, "yMm": 20, "symbology": "CODE128", "data": "1Z999AA1",
+        "heightMm": 20, "moduleWidth": 2, "humanReadable": true },
+      { "type": "QR", "xMm": 60, "yMm": 60, "data": "https://…", "magnification": 6, "errorCorrection": "M" },
+      { "type": "DATA_MATRIX", "xMm": 5, "yMm": 60, "data": "LOT42", "moduleSize": 4 },
+      { "type": "BOX", "xMm": 2, "yMm": 2, "widthMm": 96, "heightMm": 146, "thicknessMm": 0.5 },
+      { "type": "RAW", "data": "^FO10,10^GB50,50,50^FS" }   // verbatim, in the label's language
+    ]
+  }
+}
+```
+
+Symbologies are `CODE128`, `CODE39`, `EAN13`, `EAN8`, `UPC_A` and `ITF`. Data is validated per symbology, and EAN/UPC check digits are computed by the printer. Client text is escaped for each language and cannot inject commands. Elements a language cannot express are refused with `UNSUPPORTED_OPERATION`: Data Matrix on EPL/CPCL, and 180°/270° barcodes on CPCL.
+
+### `print.receipt`
+
+```jsonc
+{
+  "printer": "Front Counter",
+  "receipt": {
+    "widthChars": 48,                     // 48 for 80 mm, 32 for 58 mm
+    "codePage": "ibm858",                 // ibm437 (default), ibm850, ibm858, windows-1252, ibm866
+    "cut": true, "openDrawer": false,
+    "items": [
+      { "type": "TEXT", "text": "KILN CAFE", "align": "CENTER", "bold": true, "doubleWidth": true, "doubleHeight": true },
+      { "type": "COLUMNS", "left": "Latte", "right": "3.80 €" },
+      { "type": "SEPARATOR", "character": "=" },
+      { "type": "BARCODE", "symbology": "EAN13", "data": "400638133393", "heightDots": 80 },
+      { "type": "QR", "data": "https://…", "size": 6, "align": "CENTER" },
+      { "type": "IMAGE", "data": "<base64 PNG>", "align": "CENTER" },   // dithered to 1-bit
+      { "type": "FEED", "lines": 2 },
+      { "type": "CUT", "partial": true, "feedLines": 3 },
+      { "type": "DRAWER", "pin": 0 },
+      { "type": "RAW", "data": "<base64 ESC/POS>" }
+    ]
+  }
+}
+```
+
+### `print.dotmatrix`
+
+ESC/P text for impact printers, sent as RAW bytes. It is never rasterised.
+
+```jsonc
+{
+  "printer": "Epson LQ-590",
+  "copies": 2,
+  "document": {
+    "cpi": 10,                            // 10, 12, 15, 17, 20
+    "lpi": 6, "pins": 24,                 // 6 and 8 are native; others use n/180" (24-pin) or n/216" (9-pin)
+    "quality": "NLQ",                     // DRAFT | NLQ
+    "formLengthInches": 11,               // or formLengthLines
+    "skipPerforationLines": 3,            // continuous paper
+    "leftMargin": 5, "rightMargin": 80,
+    "encoding": "ibm437", "characterTable": 1,
+    "initialize": true, "formFeed": true,
+    "lines": [
+      "plain text line",
+      { "type": "LINE", "text": "TOTAL 43.90", "bold": true, "condensed": false, "doubleWidth": false,
+        "underline": false, "italic": false, "doubleStrike": false },
+      { "type": "LINE_FEED", "lines": 2 },
+      { "type": "FORM_FEED" },
+      { "type": "RAW", "data": "<base64 escape sequence>" }
+    ]
+  }
+}
+```
+
+### Direct network printers
+
+Printers listed under `[[network_printers]]` in `agent.toml` appear in `printers.list` with `type: "NETWORK"`, `port: "tcp://host:9100"` and their configured `language`. They accept RAW-producing documents (`RAW`, `TEXT` in RAW mode, `LABEL`, `RECEIPT`, `DOT_MATRIX`). A job completes with `delivery: DEVICE_DELIVERED` and `completion: BYTES_DELIVERED` once every byte is written. With `status = "ZPL"` or `"ESC/POS"`, `online`, `status` and `conditions` come from the printer itself. Clients cannot address hosts that are not configured.
+
 ## Events
 
 | Event | Payload | When |
@@ -249,7 +337,7 @@ All REST routes require `Authorization: Bearer <token>`, and responses use the s
 |---|---|
 | `GET /v1/health` (no auth) | liveness: `{ status, protocolVersions }` |
 | `GET /v1/printers` · `/v1/printers/default` · `/v1/printers/{id}` · `/v1/printers/{id}/capabilities` | `printers.*` |
-| `POST /v1/print` · `/v1/print/raw` · `/text` · `/pdf` · `/image` · `/html` → **202** | `print.*` |
+| `POST /v1/print` · `/v1/print/raw` · `/text` · `/pdf` · `/image` · `/html` · `/label` · `/receipt` · `/dotmatrix` → **202** | `print.*` |
 | `GET /v1/jobs?status=&printerId=&clientId=&since=&until=&limit=&offset=` | `jobs.list` |
 | `GET /v1/jobs/{id}` · `DELETE /v1/jobs/{id}` | `jobs.get` · `jobs.cancel` |
 | `GET /v1/queue` · `/v1/queue/{printerId}` | `queue.list` · `queue.get` |

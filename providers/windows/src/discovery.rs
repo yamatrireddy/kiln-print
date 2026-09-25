@@ -98,6 +98,7 @@ pub(crate) fn enumerate(cache: &MetaCache) -> Result<Vec<Printer>, PrintError> {
             cache.insert(name.clone(), meta);
         }
 
+        let language = status::guess_language(&name, &driver).map(str::to_owned);
         printers.push(Printer {
             id: PrinterId::derive(PROVIDER_ID, &name),
             display_name: name.clone(),
@@ -112,6 +113,7 @@ pub(crate) fn enumerate(cache: &MetaCache) -> Result<Vec<Printer>, PrintError> {
             status: state,
             conditions,
             queued_jobs: Some(info.cJobs),
+            language,
             capabilities: None,
         });
     }

@@ -90,6 +90,11 @@ pub enum PrinterCondition {
     Busy,
     WarmingUp,
     PowerSave,
+    /// Paper roll nearly empty (receipt printers).
+    PaperLow,
+    /// Print head or cover open (label/receipt printers).
+    HeadOpen,
+    RibbonOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -114,6 +119,10 @@ pub struct Printer {
     pub conditions: Vec<PrinterCondition>,
     /// Number of jobs in the OS queue, if the provider reports it.
     pub queued_jobs: Option<u32>,
+    /// Command language the printer is known or configured to understand (`ZPL`,
+    /// `ESC/POS`, …). A hint used when a document does not name its language.
+    #[serde(default)]
+    pub language: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<PrinterCapabilities>,
 }

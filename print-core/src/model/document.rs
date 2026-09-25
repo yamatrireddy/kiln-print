@@ -18,6 +18,9 @@ pub enum DocumentType {
     Pdf,
     Html,
     Image,
+    Label,
+    Receipt,
+    DotMatrix,
 }
 
 impl DocumentType {
@@ -28,6 +31,9 @@ impl DocumentType {
             Self::Pdf => "PDF",
             Self::Html => "HTML",
             Self::Image => "IMAGE",
+            Self::Label => "LABEL",
+            Self::Receipt => "RECEIPT",
+            Self::DotMatrix => "DOT_MATRIX",
         }
     }
 }
@@ -39,6 +45,9 @@ pub enum Document {
     Pdf(PdfDocument),
     Html(HtmlDocument),
     Image(ImageDocument),
+    Label(super::LabelDocument),
+    Receipt(super::ReceiptDocument),
+    DotMatrix(super::DotMatrixDocument),
 }
 
 impl Document {
@@ -49,6 +58,9 @@ impl Document {
             Self::Pdf(_) => DocumentType::Pdf,
             Self::Html(_) => DocumentType::Html,
             Self::Image(_) => DocumentType::Image,
+            Self::Label(_) => DocumentType::Label,
+            Self::Receipt(_) => DocumentType::Receipt,
+            Self::DotMatrix(_) => DocumentType::DotMatrix,
         }
     }
 
@@ -60,12 +72,17 @@ impl Document {
             Self::Pdf(pdf) => pdf.data.len() as u64,
             Self::Html(html) => html.html.len() as u64,
             Self::Image(image) => image.data.len() as u64,
+            // Structured documents: their JSON size is a fair proxy for the work involved.
+            Self::Label(doc) => serde_json::to_vec(doc).map_or(u64::MAX, |v| v.len() as u64),
+            Self::Receipt(doc) => serde_json::to_vec(doc).map_or(u64::MAX, |v| v.len() as u64),
+            Self::DotMatrix(doc) => serde_json::to_vec(doc).map_or(u64::MAX, |v| v.len() as u64),
         }
     }
 
     pub fn language(&self) -> Option<&str> {
         match self {
             Self::Raw(raw) => raw.language.as_deref(),
+            Self::Label(label) => label.language.as_deref(),
             _ => None,
         }
     }

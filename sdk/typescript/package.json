@@ -1,6 +1,6 @@
 {
   "name": "@kiln-print/sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "TypeScript/JavaScript SDK for the Kiln Print local print agent",
   "type": "module",
   "main": "./dist/index.js",

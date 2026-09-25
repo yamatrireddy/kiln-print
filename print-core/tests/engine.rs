@@ -805,10 +805,17 @@ async fn capabilities_list_deliverable_document_types() {
         .capabilities(&PrinterId::derive("mock", "Label"))
         .await
         .expect("caps");
-    // TEXT stays available through RAW text mode.
+    // TEXT stays available through RAW text mode; structured label/receipt/dot-matrix
+    // documents are encoded to RAW. Graphics (PDF, IMAGE) need a driver.
     assert_eq!(
         caps.document_types,
-        vec![DocumentType::Raw, DocumentType::Text]
+        vec![
+            DocumentType::Raw,
+            DocumentType::Text,
+            DocumentType::Label,
+            DocumentType::Receipt,
+            DocumentType::DotMatrix
+        ]
     );
     assert_eq!(caps.raw, Some(true));
 }

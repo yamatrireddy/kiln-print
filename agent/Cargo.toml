@@ -15,6 +15,7 @@ kiln-core.workspace = true
 kiln-protocols.workspace = true
 kiln-renderers.workspace = true
 kiln-provider-mock.workspace = true
+kiln-provider-tcp.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true
